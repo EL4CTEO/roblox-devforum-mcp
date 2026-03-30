@@ -7,22 +7,36 @@ import * as z from 'zod/v4';
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
 
-const server = new McpServer({ name: 'roblox-devforum-mcp', version: '1.0.0' });
+const server = new McpServer({ name: 'roblox-devforum-mcp', version: '1.3.0' });
+
+const COMMON_HEADERS = {
+  'Accept': 'application/json',
+  'User-Agent': 'roblox-devforum-mcp/1.3.0'
+};
 
 async function fetchJSON(url: string): Promise<any> {
-  const res = await fetch(url, {
-    headers: { 'Accept': 'application/json', 'User-Agent': 'roblox-devforum-mcp/1.0.0' }
-  });
+  const res = await fetch(url, { headers: COMMON_HEADERS });
   if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
   if (res.status === 404) throw new Error(`Not found: ${url}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
   return res.json();
 }
 
+async function fetchJSONWithFallback(urls: string[]): Promise<any> {
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers: COMMON_HEADERS });
+      if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
+      if (res.ok) return await res.json();
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Rate limited')) throw e;
+    }
+  }
+  throw new Error(`All endpoints failed: ${urls.join(', ')}`);
+}
+
 async function fetchHTML(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'roblox-devforum-mcp/1.0.0' }
-  });
+  const res = await fetch(url, { headers: { 'User-Agent': 'roblox-devforum-mcp/1.3.0' } });
   if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
   if (res.status === 404) throw new Error(`Not found: ${url}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -48,13 +62,18 @@ function formatDate(d: string): string {
   return new Date(d).toISOString().split('T')[0];
 }
 
-function topicLine(t: any): string {
+function topicLine(t: any, users?: Map<number, string>): string {
   const date = t.created_at ? formatDate(t.created_at) : 'unknown';
   const title = t.title || t.fancy_title || 'Untitled';
   const url = `${DEVFORUM}/t/${t.slug || t.id}/${t.id}`;
   const views = t.views ?? 0;
   const replies = t.posts_count ? t.posts_count - 1 : (t.reply_count ?? 0);
-  return `\u2022 ${title}\n  Author: ${t.last_poster_username || 'unknown'} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
+  let author = t.last_poster_username || 'unknown';
+  if (author === 'unknown' && users && t.posters?.length) {
+    const poster = t.posters[0];
+    author = users.get(poster.user_id) || 'unknown';
+  }
+  return `\u2022 ${title}\n  Author: ${author} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
 
 function formatTopics(topics: any[], users: any[], limit: number): string {
@@ -65,8 +84,14 @@ function formatTopics(topics: any[], users: any[], limit: number): string {
       const poster = t.posters[0];
       t.last_poster_username = userMap.get(poster.user_id) || 'unknown';
     }
-    return topicLine(t);
+    return topicLine(t, userMap);
   }).join('\n\n');
+}
+
+function buildUserMap(users?: any[]): Map<number, string> {
+  const userMap = new Map<number, string>();
+  if (users) for (const u of users) userMap.set(u.id, u.username);
+  return userMap;
 }
 
 function ok(text: string) {
@@ -77,6 +102,41 @@ function err(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
   return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
 }
+
+// ─── API Dump for get_api_docs ─────────────────────────────────────
+
+interface ApiMember {
+  Name: string;
+  MemberType: string;
+  Category?: string;
+  Security?: string | { Read?: string; Write?: string };
+  ValueType?: { Name: string; Category?: string };
+  Parameters?: Array<{ Name: string; Type: { Name: string }; Default?: string }>;
+  ReturnType?: { Name: string };
+  Tags?: string[];
+  Description?: string;
+}
+
+interface ApiClass {
+  Name: string;
+  Superclass?: string;
+  Members?: ApiMember[];
+  Tags?: string[];
+  Description?: string;
+}
+
+let apiDumpCache: ApiClass[] | null = null;
+
+async function getApiDump(): Promise<ApiClass[]> {
+  if (apiDumpCache) return apiDumpCache;
+  const data = await fetchJSON(
+    'https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json'
+  );
+  apiDumpCache = data.Classes;
+  return apiDumpCache;
+}
+
+// ─── Tools ─────────────────────────────────────────────────────────
 
 server.registerTool(
   'get_announcements',
@@ -132,7 +192,8 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(query)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No results found for "${query}".`);
-      const lines = topics.slice(0, limit).map((t: any) => topicLine(t)).join('\n\n');
+      const userMap = buildUserMap(data.users);
+      const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
       return ok(`Search results for "${query}":\n\n${lines}`);
     } catch (e) { return err(e); }
   }
@@ -169,18 +230,20 @@ server.registerTool(
   'get_action_required',
   {
     title: 'Get Action Required',
-    description: 'Get DevForum topics tagged with a specific tag (default: action-required)',
+    description: 'Get DevForum topics marked as requiring creator action, from the Updates category',
     inputSchema: z.object({
       tag: z.string().default('action-required').describe('Tag to filter by')
     })
   },
   async ({ tag }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/tag/${encodeURIComponent(tag)}.json`);
-      const topics = data.topic_list?.topics || [];
-      if (!topics.length) return ok(`No topics found with tag "${tag}".`);
-      const text = formatTopics(topics, data.users, 20);
-      return ok(`Topics tagged "${tag}":\n\n${text}`);
+      const searchQ = `"${tag.replace(/-/g, ' ')}" in:title category:updates order:latest`;
+      const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
+      const topics = data.topics || [];
+      if (!topics.length) return ok(`No topics found for "${tag}".`);
+      const userMap = buildUserMap(data.users);
+      const lines = topics.slice(0, 20).map((t: any) => topicLine(t, userMap)).join('\n\n');
+      return ok(`Topics requiring action:\n\n${lines}`);
     } catch (e) { return err(e); }
   }
 );
@@ -275,11 +338,39 @@ server.registerTool(
   },
   async ({ username }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`);
+      let header = `Recent activity for ${username}:\n\n`;
+      try {
+        const profile = await fetchJSON(`${DEVFORUM}/u/${encodeURIComponent(username)}.json`);
+        const u = profile.user;
+        if (u) {
+          header = `User: ${u.username} | Trust: ${u.trust_level ?? 'unknown'} | Posts: ${u.post_count ?? 'unknown'}\n`;
+          if (u.title) header += `Title: ${u.title}\n`;
+          header += '\n';
+        }
+      } catch {}
+
+      const res = await fetch(`${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`, { headers: COMMON_HEADERS });
+      if (!res.ok) {
+        return ok(`${header}Could not fetch activity (HTTP ${res.status}). The profile may be private or the username may be incorrect.`);
+      }
+      const data = await res.json();
+
+      if (Array.isArray(data)) {
+        const posts = data.slice(0, 15);
+        if (!posts.length) return ok(`${header}No recent activity.`);
+        const lines = posts.map((p: any) => {
+          const excerpt = (p.excerpt || strip(p.cooked || '')).slice(0, 150);
+          const topicSlug = p.slug || p.topic_id;
+          const topicUrl = `${DEVFORUM}/t/${topicSlug}/${p.topic_id}`;
+          return `\u2022 Post in topic #${p.topic_id} | Date: ${formatDate(p.created_at)}\n  ${topicUrl}\n  ${excerpt}`;
+        }).join('\n\n');
+        return ok(`${header}${lines}`);
+      }
+
       const topics = data.topic_list?.topics || [];
-      if (!topics.length) return ok(`No recent activity found for user "${username}".`);
+      if (!topics.length) return ok(`${header}No recent topic activity.`);
       const lines = topics.slice(0, 15).map((t: any) => topicLine(t)).join('\n\n');
-      return ok(`Recent activity for ${username}:\n\n${lines}`);
+      return ok(`${header}${lines}`);
     } catch (e) { return err(e); }
   }
 );
@@ -295,10 +386,88 @@ server.registerTool(
   },
   async ({ class_name }) => {
     try {
-      const html = await fetchHTML(`${CREATOR_DOCS}/docs/reference/engine/classes/${encodeURIComponent(class_name)}`);
-      const text = strip(html);
-      const trimmed = text.length > 8000 ? text.slice(0, 8000) + '\n\n[Truncated \u2014 see full docs]' : text;
-      return ok(`Roblox API Docs \u2014 ${class_name}:\n\n${trimmed}\n\nFull docs: ${CREATOR_DOCS}/docs/reference/engine/classes/${class_name}`);
+      const classes = await getApiDump();
+      const cls = classes.find(c => c.Name.toLowerCase() === class_name.toLowerCase());
+
+      if (!cls) {
+        const partials = classes
+          .filter(c => c.Name.toLowerCase().includes(class_name.toLowerCase()))
+          .slice(0, 10);
+        if (partials.length > 0) {
+          return ok(`Class "${class_name}" not found. Did you mean:\n${partials.map(c => `- ${c.Name}`).join('\n')}`);
+        }
+        return ok(`Class "${class_name}" not found in the Roblox API.`);
+      }
+
+      const chain: string[] = [cls.Name];
+      let current = cls;
+      while (current.Superclass && current.Superclass !== '<<<ROOT>>>') {
+        chain.push(current.Superclass);
+        const parent = classes.find(c => c.Name === current!.Superclass);
+        if (!parent) break;
+        current = parent;
+      }
+
+      let output = `# ${cls.Name}\n`;
+      output += `Inherits: ${chain.join(' > ')}\n`;
+      if (cls.Tags && cls.Tags.length > 0) output += `Tags: ${cls.Tags.join(', ')}\n`;
+      output += `Docs: ${CREATOR_DOCS}/docs/reference/engine/classes/${cls.Name}\n\n`;
+
+      const members = cls.Members ?? [];
+      const properties = members.filter(m => m.MemberType === 'Property');
+      const methods = members.filter(m => m.MemberType === 'Function');
+      const events = members.filter(m => m.MemberType === 'Event');
+      const callbacks = members.filter(m => m.MemberType === 'Callback');
+
+      if (properties.length > 0) {
+        output += `## Properties (${properties.length})\n`;
+        for (const p of properties) {
+          const tags = p.Tags ? ` [${p.Tags.join(', ')}]` : '';
+          const type = p.ValueType?.Name ?? 'unknown';
+          output += `- **${p.Name}**: ${type}${tags}\n`;
+        }
+        output += '\n';
+      }
+
+      if (methods.length > 0) {
+        output += `## Methods (${methods.length})\n`;
+        for (const m of methods) {
+          const tags = m.Tags ? ` [${m.Tags.join(', ')}]` : '';
+          const params = (m.Parameters ?? [])
+            .map(p => `${p.Name}: ${p.Type.Name}${p.Default !== undefined ? ` = ${p.Default}` : ''}`)
+            .join(', ');
+          const ret = m.ReturnType?.Name ?? 'void';
+          output += `- **${m.Name}**(${params}): ${ret}${tags}\n`;
+        }
+        output += '\n';
+      }
+
+      if (events.length > 0) {
+        output += `## Events (${events.length})\n`;
+        for (const e of events) {
+          const tags = e.Tags ? ` [${e.Tags.join(', ')}]` : '';
+          const params = (e.Parameters ?? [])
+            .map(p => `${p.Name}: ${p.Type.Name}`)
+            .join(', ');
+          output += `- **${e.Name}**(${params})${tags}\n`;
+        }
+        output += '\n';
+      }
+
+      if (callbacks.length > 0) {
+        output += `## Callbacks (${callbacks.length})\n`;
+        for (const c of callbacks) {
+          const tags = c.Tags ? ` [${c.Tags.join(', ')}]` : '';
+          output += `- **${c.Name}**${tags}\n`;
+        }
+        output += '\n';
+      }
+
+      if (cls.Superclass && cls.Superclass !== '<<<ROOT>>>') {
+        output += `\n_Inherited from ${chain.slice(1).join(', ')} \u2014 use get_api_docs with the parent class name for those members._\n`;
+      }
+
+      return ok(output);
     } catch (e) { return err(e); }
   }
 );
@@ -315,10 +484,48 @@ server.registerTool(
   },
   async ({ query, limit }) => {
     try {
-      const html = await fetchHTML(`${CREATOR_DOCS}/search?q=${encodeURIComponent(query)}`);
-      const text = strip(html);
-      const trimmed = text.length > 6000 ? text.slice(0, 6000) + '\n\n[Truncated]' : text;
-      return ok(`Creator Docs search for "${query}":\n\n${trimmed}\n\nSearch URL: ${CREATOR_DOCS}/search?q=${encodeURIComponent(query)}`);
+      try {
+        const algoliaRes = await fetch('https://85zn6ifj4h-dsn.algolia.net/1/indexes/*/queries', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'roblox-devforum-mcp/1.3.0',
+            'X-Algolia-Api-Key': '7b33628bc17a987d6e3e2590db6c0e5d',
+            'X-Algolia-Application-Id': '85ZN6IFJ4H'
+          },
+          body: JSON.stringify({
+            requests: [{
+              indexName: 'creator_hub',
+              params: `query=${encodeURIComponent(query)}&hitsPerPage=${limit}`
+            }]
+          })
+        });
+
+        if (algoliaRes.ok) {
+          const data = await algoliaRes.json();
+          const results = data.results?.[0]?.hits || [];
+          if (results.length) {
+            const lines = results.map((h: any) => {
+              const title = h.title || h.hierarchy?.lvl1 || h.name || 'Untitled';
+              const url = h.url || `${CREATOR_DOCS}/docs/${h.slug || ''}`;
+              const snippet = (h._highlightResult?.content?.value || h.content || h.description || '').replace(/<[^>]+>/g, '');
+              const cleanSnippet = snippet.slice(0, 200);
+              return `\u2022 ${title}\n  ${url}\n  ${cleanSnippet}`;
+            }).join('\n\n');
+            return ok(`Creator Docs search for "${query}":\n\n${lines}`);
+          }
+        }
+      } catch {}
+
+      const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources`)}`);
+      const topics = devforumData.topics || [];
+      if (topics.length) {
+        const userMap = buildUserMap(devforumData.users);
+        const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
+        return ok(`Creator Docs search for "${query}" (via DevForum):\n\n${lines}`);
+      }
+
+      return ok(`No results found for "${query}" in Creator Docs.`);
     } catch (e) { return err(e); }
   }
 );
@@ -378,7 +585,15 @@ server.registerTool(
       text += `Description: ${strip(c.description || 'none')}\n`;
       text += `Topics: ${c.topic_count}\n`;
       text += `Posts: ${c.post_count}\n`;
-      if (c.subcategory_ids?.length) text += `Subcategory IDs: ${c.subcategory_ids.join(', ')}\n`;
+      if (c.subcategory_ids?.length) {
+        const subcategories = data.subcategory_list?.categories || [];
+        const subMap = new Map(subcategories.map((sc: any) => [sc.id, sc]));
+        const subLines = c.subcategory_ids.map((id: number) => {
+          const sub = subMap.get(id);
+          return sub ? `${sub.name} (ID: ${sub.id}, ${sub.topic_count} topics)` : `ID: ${id}`;
+        });
+        text += `Subcategories: ${subLines.join(', ')}\n`;
+      }
       if (c.moderators?.length) {
         text += `Moderators: ${c.moderators.map((m: any) => m.username).join(', ')}\n`;
       }
@@ -404,7 +619,8 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No bug reports found for "${query}" in ${category}.`);
-      const lines = topics.slice(0, limit).map((t: any) => topicLine(t)).join('\n\n');
+      const userMap = buildUserMap(data.users);
+      const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
       return ok(`Bug reports for "${query}" in ${category}:\n\n${lines}`);
     } catch (e) { return err(e); }
   }
@@ -426,8 +642,9 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No solved topics found for "${query}".`);
+      const userMap = buildUserMap(data.users);
       const lines = topics.slice(0, limit).map((t: any) => {
-        const base = topicLine(t);
+        const base = topicLine(t, userMap);
         const accepted = t.has_accepted_answer ? ' \u2705 Has accepted answer' : '';
         return base + accepted;
       }).join('\n\n');
@@ -440,13 +657,18 @@ server.registerTool(
   'get_new_posts',
   {
     title: 'Get New Posts',
-    description: 'Get the newest topics on the DevForum',
-    inputSchema: z.object({})
+    description: 'Get the newest topics on the DevForum. Falls back to latest if new topics endpoint requires authentication.',
+    inputSchema: z.object({
+      limit: z.number().min(1).max(30).default(15).describe('Max topics to return')
+    })
   },
-  async () => {
+  async ({ limit }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/new.json`);
-      const text = formatTopics(data.topic_list.topics, data.users, 15);
+      const data = await fetchJSONWithFallback([
+        `${DEVFORUM}/new.json`,
+        `${DEVFORUM}/latest.json?order=created`
+      ]);
+      const text = formatTopics(data.topic_list.topics, data.users, limit);
       return ok(`Newest DevForum topics:\n\n${text}`);
     } catch (e) { return err(e); }
   }
