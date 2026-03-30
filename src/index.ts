@@ -132,8 +132,8 @@ async function getApiDump(): Promise<ApiClass[]> {
   const data = await fetchJSON(
     'https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json'
   );
-  apiDumpCache = data.Classes;
-  return apiDumpCache;
+  apiDumpCache = data.Classes as ApiClass[];
+  return apiDumpCache!;
 }
 
 // ─── Tools ─────────────────────────────────────────────────────────
@@ -586,8 +586,8 @@ server.registerTool(
       text += `Topics: ${c.topic_count}\n`;
       text += `Posts: ${c.post_count}\n`;
       if (c.subcategory_ids?.length) {
-        const subcategories = data.subcategory_list?.categories || [];
-        const subMap = new Map(subcategories.map((sc: any) => [sc.id, sc]));
+        const subcategories: any[] = data.subcategory_list?.categories || [];
+        const subMap = new Map<number, any>(subcategories.map((sc: any) => [sc.id, sc]));
         const subLines = c.subcategory_ids.map((id: number) => {
           const sub = subMap.get(id);
           return sub ? `${sub.name} (ID: ${sub.id}, ${sub.topic_count} topics)` : `ID: ${id}`;
