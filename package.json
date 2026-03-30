@@ -1,0 +1,25 @@
+{
+  "name": "roblox-devforum-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Roblox Developer Forum and Creator Documentation",
+  "main": "build/index.js",
+  "bin": {
+    "roblox-devforum-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js"
+  },
+  "keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs"],
+  "author": "EL4CTEO",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
