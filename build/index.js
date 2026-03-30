@@ -477,44 +477,12 @@ server.registerTool('search_creator_docs', {
     })
 }, async ({ query, limit }) => {
     try {
-        try {
-            const algoliaRes = await fetch('https://85zn6ifj4h-dsn.algolia.net/1/indexes/*/queries', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'roblox-devforum-mcp/1.3.0',
-                    'X-Algolia-Api-Key': '7b33628bc17a987d6e3e2590db6c0e5d',
-                    'X-Algolia-Application-Id': '85ZN6IFJ4H'
-                },
-                body: JSON.stringify({
-                    requests: [{
-                            indexName: 'creator_hub',
-                            params: `query=${encodeURIComponent(query)}&hitsPerPage=${limit}`
-                        }]
-                })
-            });
-            if (algoliaRes.ok) {
-                const data = await algoliaRes.json();
-                const results = data.results?.[0]?.hits || [];
-                if (results.length) {
-                    const lines = results.map((h) => {
-                        const title = h.title || h.hierarchy?.lvl1 || h.name || 'Untitled';
-                        const url = h.url || `${CREATOR_DOCS}/docs/${h.slug || ''}`;
-                        const snippet = (h._highlightResult?.content?.value || h.content || h.description || '').replace(/<[^>]+>/g, '');
-                        const cleanSnippet = snippet.slice(0, 200);
-                        return `\u2022 ${title}\n  ${url}\n  ${cleanSnippet}`;
-                    }).join('\n\n');
-                    return ok(`Creator Docs search for "${query}":\n\n${lines}`);
-                }
-            }
-        }
-        catch { }
         const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources`)}`);
         const topics = devforumData.topics || [];
         if (topics.length) {
-            const userMap = buildUserMap(devforumData.users);
+            const userMap = searchUserMap(devforumData);
             const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
-            return ok(`Creator Docs search for "${query}" (via DevForum):\n\n${lines}`);
+            return ok(`Creator Docs search for "${query}":\n\n${lines}`);
         }
         return ok(`No results found for "${query}" in Creator Docs.`);
     }
@@ -530,9 +498,21 @@ server.registerTool('get_categories', {
     try {
         const data = await fetchJSON(`${DEVFORUM}/categories.json`);
         const cats = data.category_list?.categories || [];
+        let siteCats = null;
+        try {
+            const siteData = await fetchJSON(`${DEVFORUM}/site.json`);
+            siteCats = new Map((siteData.categories || []).map((c) => [c.id, c]));
+        }
+        catch { }
         const lines = cats.map((c) => {
             const desc = c.description_text ? ` \u2014 ${c.description_text.slice(0, 100)}` : '';
-            return `\u2022 ${c.name} (ID: ${c.id}, slug: ${c.slug})${desc}\n  Topics: ${c.topic_count}`;
+            let topicCount = c.topic_count;
+            if (!topicCount && siteCats) {
+                const sc = siteCats.get(c.id);
+                if (sc?.topic_count)
+                    topicCount = sc.topic_count;
+            }
+            return `\u2022 ${c.name} (ID: ${c.id}, slug: ${c.slug})${desc}\n  Topics: ${topicCount || 0}`;
         }).join('\n\n');
         return ok(`DevForum Categories:\n\n${lines}`);
     }
@@ -548,8 +528,9 @@ server.registerTool('get_tags', {
     try {
         const data = await fetchJSON(`${DEVFORUM}/tags.json`);
         const tags = data.tags || [];
-        const lines = tags.map((t) => `\u2022 ${t.name} (${t.count} topics)`).join('\n');
-        return ok(`DevForum Tags:\n\n${lines}`);
+        const sorted = tags.sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 100);
+        const lines = sorted.map((t) => `\u2022 ${t.name} (${t.count} topics)`).join('\n');
+        return ok(`DevForum Tags (top 100 by topic count):\n\n${lines}`);
     }
     catch (e) {
         return err(e);
