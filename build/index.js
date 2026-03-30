@@ -368,17 +368,16 @@ server.registerTool('get_user_posts', {
             const posts = data.slice(0, 15);
             if (!posts.length)
                 return ok(`${header}No recent activity.`);
-            const topicIds = [...new Set(posts.map((p) => p.topic_id).filter(Boolean))];
+            const topicIds = [...new Set(posts.map((p) => p.topic_id).filter(Boolean))].slice(0, 10);
             const titleMap = new Map();
-            if (topicIds.length) {
+            await Promise.all(topicIds.map(async (id) => {
                 try {
-                    const tData = await fetchJSON(`${DEVFORUM}/t/${topicIds.slice(0, 20).join(',')}.json`);
-                    for (const t of (tData.topic_list?.topics || [])) {
-                        titleMap.set(t.id, t.title || t.fancy_title || '');
-                    }
+                    const tData = await fetchJSON(`${DEVFORUM}/t/${id}.json`);
+                    if (tData.title)
+                        titleMap.set(id, tData.title);
                 }
                 catch { }
-            }
+            }));
             const lines = posts.map((p) => {
                 const excerpt = strip(p.excerpt || p.cooked || '').slice(0, 150);
                 const topicTitle = titleMap.get(p.topic_id) || `Topic #${p.topic_id}`;
