@@ -597,20 +597,17 @@ server.registerTool(
       let postCount = raw.post_count;
       let subs: any[] = data.subcategory_list?.categories || [];
 
-      // Fallback: /categories.json for incomplete data (parent categories)
+      // Fallback: /site.json for parent categories (Discourse hides subcategories from /categories.json)
       if (!topicCount || (!subs.length && raw.subcategory_ids?.length)) {
         try {
-          const allCats = await fetchJSON(`${DEVFORUM}/categories.json`);
-          const flat: any[] = allCats.category_list?.categories || [];
-          const fullCat = flat.find((cat: any) => cat.id === category_id);
-          if (fullCat) {
-            if (!topicCount && fullCat.topic_count) {
-              topicCount = fullCat.topic_count;
-              postCount = fullCat.post_count || postCount;
-            }
-            if (!subs.length && fullCat.subcategory_list?.categories?.length) {
-              subs = fullCat.subcategory_list.categories;
-            }
+          const siteData = await fetchJSON(`${DEVFORUM}/site.json`);
+          const allCats: any[] = siteData.categories || [];
+          if (!subs.length) {
+            subs = allCats.filter((c: any) => c.parent_category_id === category_id);
+          }
+          if (!topicCount && subs.length) {
+            topicCount = subs.reduce((sum: number, s: any) => sum + (s.topic_count || 0), 0);
+            postCount = subs.reduce((sum: number, s: any) => sum + (s.post_count || 0), 0);
           }
         } catch {}
       }
