@@ -206,7 +206,11 @@ server.registerTool(
       const topics = data.topics || [];
       if (!topics.length) return ok(`No results found for "${query}".`);
       const userMap = searchUserMap(data);
-      const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
+      const lines = topics.slice(0, limit).map((t: any) => {
+        const base = topicLine(t, userMap);
+        const solved = t.has_accepted_answer ? ' [SOLVED]' : '';
+        return base + solved;
+      }).join('\n\n');
       return ok(`Search results for "${query}":\n\n${lines}`);
     } catch (e) { return err(e); }
   }
@@ -216,7 +220,7 @@ server.registerTool(
   'get_thread',
   {
     title: 'Get Thread',
-    description: 'Get a specific DevForum thread with its first page of posts. Never auto-paginates.',
+    description: 'Get a specific DevForum thread. Returns the first post (title + content) and reply count. Use get_post_replies to read replies.',
     inputSchema: z.object({
       thread_id: z.string().describe('Thread ID or slug')
     })
@@ -224,15 +228,16 @@ server.registerTool(
   async ({ thread_id }) => {
     try {
       const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json`);
-      const posts = (data.post_stream?.posts || []).slice(0, 20);
+      const firstPost = data.post_stream?.posts?.[0];
       let text = `Title: ${data.title}\n`;
-      text += `Author: ${posts[0]?.username || 'unknown'} | Date: ${formatDate(data.created_at)}\n`;
+      text += `Author: ${firstPost?.username || 'unknown'} | Date: ${formatDate(data.created_at)}\n`;
       text += `Tags: ${(data.tags || []).join(', ') || 'none'}\n`;
       text += `Replies: ${data.posts_count - 1} | Views: ${data.views}\n`;
+      text += `Solved: ${data.has_accepted_answer ? 'Yes' : 'No'}\n`;
       text += `URL: ${DEVFORUM}/t/${data.slug}/${data.id}\n\n`;
-      for (const p of posts) {
-        text += `--- Post by ${p.username} (${formatDate(p.created_at)}) ---\n`;
-        text += strip(p.cooked) + '\n\n';
+      if (firstPost) {
+        text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
+        text += strip(firstPost.cooked);
       }
       return ok(text.trim());
     } catch (e) { return err(e); }
@@ -371,11 +376,22 @@ server.registerTool(
       if (Array.isArray(data)) {
         const posts = data.slice(0, 15);
         if (!posts.length) return ok(`${header}No recent activity.`);
+        const topicIds = [...new Set(posts.map((p: any) => p.topic_id).filter(Boolean))];
+        const titleMap = new Map<number, string>();
+        if (topicIds.length) {
+          try {
+            const tData = await fetchJSON(`${DEVFORUM}/t/${topicIds.slice(0, 20).join(',')}.json`);
+            for (const t of (tData.topic_list?.topics || [])) {
+              titleMap.set(t.id, t.title || t.fancy_title || '');
+            }
+          } catch {}
+        }
         const lines = posts.map((p: any) => {
           const excerpt = strip(p.excerpt || p.cooked || '').slice(0, 150);
+          const topicTitle = titleMap.get(p.topic_id) || `Topic #${p.topic_id}`;
           const topicSlug = p.slug || p.topic_id;
           const topicUrl = `${DEVFORUM}/t/${topicSlug}/${p.topic_id}`;
-          return `\u2022 Post in topic #${p.topic_id} | Date: ${formatDate(p.created_at)}\n  ${topicUrl}\n  ${excerpt}`;
+          return `\u2022 ${topicTitle}\n  Author: ${p.username || 'unknown'} | Date: ${formatDate(p.created_at)}\n  ${topicUrl}\n  ${excerpt}`;
         }).join('\n\n');
         return ok(`${header}${lines}`);
       }
@@ -489,7 +505,7 @@ server.registerTool(
   'search_creator_docs',
   {
     title: 'Search Creator Docs',
-    description: 'Search the official Roblox Creator documentation',
+    description: 'Search community tutorials and resources from the DevForum Resources category. For official Roblox API docs, use get_api_docs instead.',
     inputSchema: z.object({
       query: z.string().describe('Search query'),
       limit: z.number().min(1).max(20).default(10).describe('Max results')
