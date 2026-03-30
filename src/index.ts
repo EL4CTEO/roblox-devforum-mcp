@@ -524,14 +524,15 @@ server.registerTool(
       let siteCats: Map<number, any> | null = null;
       try {
         const siteData = await fetchJSON(`${DEVFORUM}/site.json`);
-        siteCats = new Map((siteData.categories || []).map((c: any) => [c.id, c]));
+        const all = siteData.categories || [];
+        siteCats = new Map(all.map((c: any) => [c.id, c]));
       } catch {}
       const lines = cats.map((c: any) => {
         const desc = c.description_text ? ` \u2014 ${c.description_text.slice(0, 100)}` : '';
         let topicCount = c.topic_count;
         if (!topicCount && siteCats) {
-          const sc = siteCats.get(c.id);
-          if (sc?.topic_count) topicCount = sc.topic_count;
+          const subs = [...siteCats.values()].filter((s: any) => s.parent_category_id === c.id);
+          topicCount = subs.reduce((sum: number, s: any) => sum + (s.topic_count || 0), 0);
         }
         return `\u2022 ${c.name} (ID: ${c.id}, slug: ${c.slug})${desc}\n  Topics: ${topicCount || 0}`;
       }).join('\n\n');
