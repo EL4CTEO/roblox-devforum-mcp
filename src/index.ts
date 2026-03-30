@@ -7,22 +7,36 @@ import * as z from 'zod/v4';
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
 
-const server = new McpServer({ name: 'roblox-devforum-mcp', version: '1.0.0' });
+const server = new McpServer({ name: 'roblox-devforum-mcp', version: '1.1.0' });
+
+const COMMON_HEADERS = {
+  'Accept': 'application/json',
+  'User-Agent': 'roblox-devforum-mcp/1.1.0'
+};
 
 async function fetchJSON(url: string): Promise<any> {
-  const res = await fetch(url, {
-    headers: { 'Accept': 'application/json', 'User-Agent': 'roblox-devforum-mcp/1.0.0' }
-  });
+  const res = await fetch(url, { headers: COMMON_HEADERS });
   if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
   if (res.status === 404) throw new Error(`Not found: ${url}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
   return res.json();
 }
 
+async function fetchJSONWithFallback(urls: string[]): Promise<any> {
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers: COMMON_HEADERS });
+      if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
+      if (res.ok) return await res.json();
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Rate limited')) throw e;
+    }
+  }
+  throw new Error(`All endpoints failed: ${urls.join(', ')}`);
+}
+
 async function fetchHTML(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'roblox-devforum-mcp/1.0.0' }
-  });
+  const res = await fetch(url, { headers: { 'User-Agent': 'roblox-devforum-mcp/1.1.0' } });
   if (res.status === 429) throw new Error('Rate limited by server. Please wait and try again.');
   if (res.status === 404) throw new Error(`Not found: ${url}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -176,7 +190,10 @@ server.registerTool(
   },
   async ({ tag }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/tag/${encodeURIComponent(tag)}.json`);
+      const data = await fetchJSONWithFallback([
+        `${DEVFORUM}/tag/${encodeURIComponent(tag)}.json`,
+        `${DEVFORUM}/search.json?q=${encodeURIComponent(`tags:${tag}`)}`
+      ]);
       const topics = data.topic_list?.topics || [];
       if (!topics.length) return ok(`No topics found with tag "${tag}".`);
       const text = formatTopics(topics, data.users, 20);
@@ -268,18 +285,33 @@ server.registerTool(
   'get_user_posts',
   {
     title: 'Get User Posts',
-    description: 'Get recent activity for a DevForum user',
+    description: 'Get recent activity and profile info for a DevForum user',
     inputSchema: z.object({
       username: z.string().describe('DevForum username')
     })
   },
   async ({ username }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`);
+      let profileText = '';
+      try {
+        const profile = await fetchJSON(`${DEVFORUM}/u/${encodeURIComponent(username)}.json`);
+        const u = profile.user;
+        if (u) {
+          profileText = `User: ${u.username} | Trust: ${u.trust_level ?? 'unknown'} | Posts: ${u.post_count ?? 'unknown'}\n`;
+          if (u.title) profileText += `Title: ${u.title}\n`;
+          profileText += '\n';
+        }
+      } catch {}
+
+      const data = await fetchJSONWithFallback([
+        `${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`,
+        `${DEVFORUM}/u/${encodeURIComponent(username)}/activity/topics.json`
+      ]);
       const topics = data.topic_list?.topics || [];
-      if (!topics.length) return ok(`No recent activity found for user "${username}".`);
+      if (!topics.length && !profileText) return ok(`No activity found for user "${username}". The profile may be private or the username may be incorrect.`);
       const lines = topics.slice(0, 15).map((t: any) => topicLine(t)).join('\n\n');
-      return ok(`Recent activity for ${username}:\n\n${lines}`);
+      const header = profileText || `Recent activity for ${username}:\n\n`;
+      return ok(lines ? `${header}${lines}` : `${header}No recent topic activity.`);
     } catch (e) { return err(e); }
   }
 );
@@ -307,7 +339,7 @@ server.registerTool(
   'search_creator_docs',
   {
     title: 'Search Creator Docs',
-    description: 'Search the official Roblox Creator documentation',
+    description: 'Search the official Roblox Creator documentation using the Algolia search API',
     inputSchema: z.object({
       query: z.string().describe('Search query'),
       limit: z.number().min(1).max(20).default(10).describe('Max results')
@@ -315,10 +347,38 @@ server.registerTool(
   },
   async ({ query, limit }) => {
     try {
-      const html = await fetchHTML(`${CREATOR_DOCS}/search?q=${encodeURIComponent(query)}`);
-      const text = strip(html);
-      const trimmed = text.length > 6000 ? text.slice(0, 6000) + '\n\n[Truncated]' : text;
-      return ok(`Creator Docs search for "${query}":\n\n${trimmed}\n\nSearch URL: ${CREATOR_DOCS}/search?q=${encodeURIComponent(query)}`);
+      const algoliaRes = await fetch('https://85zn6ifj4h-dsn.algolia.net/1/indexes/*/queries', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'roblox-devforum-mcp/1.1.0',
+          'X-Algolia-Api-Key': '7b33628bc17a987d6e3e2590db6c0e5d',
+          'X-Algolia-Application-Id': '85ZN6IFJ4H'
+        },
+        body: JSON.stringify({
+          requests: [{
+            indexName: 'creator_hub',
+            params: `query=${encodeURIComponent(query)}&hitsPerPage=${limit}`
+          }]
+        })
+      });
+
+      if (algoliaRes.ok) {
+        const data = await algoliaRes.json();
+        const results = data.results?.[0]?.hits || [];
+        if (results.length) {
+          const lines = results.map((h: any) => {
+            const title = h.title || h.hierarchy?.lvl1 || h.name || 'Untitled';
+            const url = h.url || `${CREATOR_DOCS}/docs/${h.slug || ''}`;
+            const snippet = (h._highlightResult?.content?.value || h.content || h.description || '').replace(/<[^>]+>/g, '');
+            const cleanSnippet = snippet.slice(0, 200);
+            return `\u2022 ${title}\n  ${url}\n  ${cleanSnippet}`;
+          }).join('\n\n');
+          return ok(`Creator Docs search for "${query}":\n\n${lines}`);
+        }
+      }
+
+      return ok(`No results found for "${query}" in Creator Docs.`);
     } catch (e) { return err(e); }
   }
 );
@@ -440,13 +500,18 @@ server.registerTool(
   'get_new_posts',
   {
     title: 'Get New Posts',
-    description: 'Get the newest topics on the DevForum',
-    inputSchema: z.object({})
+    description: 'Get the newest topics on the DevForum. Falls back to latest if new topics endpoint requires authentication.',
+    inputSchema: z.object({
+      limit: z.number().min(1).max(30).default(15).describe('Max topics to return')
+    })
   },
-  async () => {
+  async ({ limit }) => {
     try {
-      const data = await fetchJSON(`${DEVFORUM}/new.json`);
-      const text = formatTopics(data.topic_list.topics, data.users, 15);
+      const data = await fetchJSONWithFallback([
+        `${DEVFORUM}/new.json`,
+        `${DEVFORUM}/latest.json?order=created`
+      ]);
+      const text = formatTopics(data.topic_list.topics, data.users, limit);
       return ok(`Newest DevForum topics:\n\n${text}`);
     } catch (e) { return err(e); }
   }
