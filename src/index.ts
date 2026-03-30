@@ -68,12 +68,15 @@ function topicLine(t: any, users?: Map<number, string>): string {
   const url = `${DEVFORUM}/t/${t.slug || t.id}/${t.id}`;
   const views = t.views ?? 0;
   const replies = t.posts_count ? t.posts_count - 1 : (t.reply_count ?? 0);
-  let author = t.last_poster_username || 'unknown';
-  if (author === 'unknown' && users && t.posters?.length) {
+  let author = t.last_poster_username || '';
+  if (!author && users && t.posters?.length) {
     const poster = t.posters[0];
-    author = users.get(poster.user_id) || 'unknown';
+    author = users.get(poster.user_id) || '';
   }
-  return `\u2022 ${title}\n  Author: ${author} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
+  if (!author && users && t.id) {
+    author = users.get(t.id) || '';
+  }
+  return `\u2022 ${title}\n  Author: ${author || 'unknown'} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
 
 function formatTopics(topics: any[], users: any[], limit: number): string {
@@ -92,6 +95,16 @@ function buildUserMap(users?: any[]): Map<number, string> {
   const userMap = new Map<number, string>();
   if (users) for (const u of users) userMap.set(u.id, u.username);
   return userMap;
+}
+
+function searchUserMap(data: any): Map<number, string> {
+  const map = buildUserMap(data.users);
+  if (data.posts && !map.size) {
+    for (const p of data.posts) {
+      if (p.topic_id && p.username && !map.has(p.topic_id)) map.set(p.topic_id, p.username);
+    }
+  }
+  return map;
 }
 
 function ok(text: string) {
@@ -192,7 +205,7 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(query)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No results found for "${query}".`);
-      const userMap = buildUserMap(data.users);
+      const userMap = searchUserMap(data);
       const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
       return ok(`Search results for "${query}":\n\n${lines}`);
     } catch (e) { return err(e); }
@@ -241,7 +254,7 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No topics found for "${tag}".`);
-      const userMap = buildUserMap(data.users);
+      const userMap = searchUserMap(data);
       const lines = topics.slice(0, 20).map((t: any) => topicLine(t, userMap)).join('\n\n');
       return ok(`Topics requiring action:\n\n${lines}`);
     } catch (e) { return err(e); }
@@ -359,7 +372,7 @@ server.registerTool(
         const posts = data.slice(0, 15);
         if (!posts.length) return ok(`${header}No recent activity.`);
         const lines = posts.map((p: any) => {
-          const excerpt = (p.excerpt || strip(p.cooked || '')).slice(0, 150);
+          const excerpt = strip(p.excerpt || p.cooked || '').slice(0, 150);
           const topicSlug = p.slug || p.topic_id;
           const topicUrl = `${DEVFORUM}/t/${topicSlug}/${p.topic_id}`;
           return `\u2022 Post in topic #${p.topic_id} | Date: ${formatDate(p.created_at)}\n  ${topicUrl}\n  ${excerpt}`;
@@ -587,7 +600,19 @@ server.registerTool(
       text += `Posts: ${c.post_count}\n`;
       if (c.subcategory_ids?.length) {
         const subcategories: any[] = data.subcategory_list?.categories || [];
-        const subMap = new Map<number, any>(subcategories.map((sc: any) => [sc.id, sc]));
+        let subMap = new Map<number, any>(subcategories.map((sc: any) => [sc.id, sc]));
+        if (!subMap.size) {
+          try {
+            const allCats = await fetchJSON(`${DEVFORUM}/categories.json`);
+            const flat: any[] = allCats.category_list?.categories || [];
+            for (const cat of flat) {
+              subMap.set(cat.id, cat);
+              if (cat.subcategory_list?.categories) {
+                for (const sub of cat.subcategory_list.categories) subMap.set(sub.id, sub);
+              }
+            }
+          } catch {}
+        }
         const subLines = c.subcategory_ids.map((id: number) => {
           const sub = subMap.get(id);
           return sub ? `${sub.name} (ID: ${sub.id}, ${sub.topic_count} topics)` : `ID: ${id}`;
@@ -619,7 +644,7 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No bug reports found for "${query}" in ${category}.`);
-      const userMap = buildUserMap(data.users);
+      const userMap = searchUserMap(data);
       const lines = topics.slice(0, limit).map((t: any) => topicLine(t, userMap)).join('\n\n');
       return ok(`Bug reports for "${query}" in ${category}:\n\n${lines}`);
     } catch (e) { return err(e); }
@@ -642,7 +667,7 @@ server.registerTool(
       const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
       const topics = data.topics || [];
       if (!topics.length) return ok(`No solved topics found for "${query}".`);
-      const userMap = buildUserMap(data.users);
+      const userMap = searchUserMap(data);
       const lines = topics.slice(0, limit).map((t: any) => {
         const base = topicLine(t, userMap);
         const accepted = t.has_accepted_answer ? ' \u2705 Has accepted answer' : '';
