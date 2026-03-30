@@ -592,36 +592,43 @@ server.registerTool(
   async ({ category_id }) => {
     try {
       const data = await fetchJSON(`${DEVFORUM}/c/${category_id}/show.json`);
-      const c = data.category;
-      let text = `Category: ${c.name} (ID: ${c.id})\n`;
-      text += `Slug: ${c.slug}\n`;
-      text += `Description: ${strip(c.description || 'none')}\n`;
-      text += `Topics: ${c.topic_count}\n`;
-      text += `Posts: ${c.post_count}\n`;
-      if (c.subcategory_ids?.length) {
-        const subcategories: any[] = data.subcategory_list?.categories || [];
-        let subMap = new Map<number, any>(subcategories.map((sc: any) => [sc.id, sc]));
-        if (!subMap.size) {
-          try {
-            const allCats = await fetchJSON(`${DEVFORUM}/categories.json`);
-            const flat: any[] = allCats.category_list?.categories || [];
-            for (const cat of flat) {
-              subMap.set(cat.id, cat);
-              if (cat.subcategory_list?.categories) {
-                for (const sub of cat.subcategory_list.categories) subMap.set(sub.id, sub);
-              }
+      const raw = data.category;
+      let topicCount = raw.topic_count;
+      let postCount = raw.post_count;
+      let subs: any[] = data.subcategory_list?.categories || [];
+
+      // Fallback: /categories.json for incomplete data (parent categories)
+      if (!topicCount || (!subs.length && raw.subcategory_ids?.length)) {
+        try {
+          const allCats = await fetchJSON(`${DEVFORUM}/categories.json`);
+          const flat: any[] = allCats.category_list?.categories || [];
+          const fullCat = flat.find((cat: any) => cat.id === category_id);
+          if (fullCat) {
+            if (!topicCount && fullCat.topic_count) {
+              topicCount = fullCat.topic_count;
+              postCount = fullCat.post_count || postCount;
             }
-          } catch {}
-        }
-        const subLines = c.subcategory_ids.map((id: number) => {
-          const sub = subMap.get(id);
-          return sub ? `${sub.name} (ID: ${sub.id}, ${sub.topic_count} topics)` : `ID: ${id}`;
-        });
-        text += `Subcategories: ${subLines.join(', ')}\n`;
+            if (!subs.length && fullCat.subcategory_list?.categories?.length) {
+              subs = fullCat.subcategory_list.categories;
+            }
+          }
+        } catch {}
       }
-      if (c.moderators?.length) {
-        text += `Moderators: ${c.moderators.map((m: any) => m.username).join(', ')}\n`;
+
+      let text = `Category: ${raw.name} (ID: ${raw.id})\n`;
+      text += `Slug: ${raw.slug}\n`;
+      text += `Description: ${strip(raw.description || 'none')}\n`;
+      text += `Topics: ${topicCount}\n`;
+      text += `Posts: ${postCount}\n`;
+
+      if (subs.length) {
+        text += `Subcategories: ${subs.map((s: any) => `${s.name} (ID: ${s.id}, ${s.topic_count} topics)`).join(', ')}\n`;
       }
+
+      if (raw.moderators?.length) {
+        text += `Moderators: ${raw.moderators.map((m: any) => m.username).join(', ')}\n`;
+      }
+
       return ok(text.trim());
     } catch (e) { return err(e); }
   }
