@@ -204,7 +204,7 @@ server.registerTool('search_devforum', {
     })
 }, async ({ query, limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(query)}`);
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(query + ' order:latest')}`);
         const topics = data.topics || [];
         if (!topics.length)
             return ok(`No results found for "${query}".`);
@@ -493,7 +493,7 @@ server.registerTool('search_creator_docs', {
     })
 }, async ({ query, limit }) => {
     try {
-        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources`)}`);
+        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
         const topics = devforumData.topics || [];
         if (topics.length) {
             const userMap = searchUserMap(devforumData);
@@ -607,7 +607,7 @@ server.registerTool('search_bugs', {
     })
 }, async ({ query, category, limit }) => {
     try {
-        const q = `${query} category:${category}`;
+        const q = `${query} category:${category} order:latest`;
         const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
         const topics = data.topics || [];
         if (!topics.length)
@@ -629,7 +629,7 @@ server.registerTool('get_solved_topics', {
     })
 }, async ({ query, limit }) => {
     try {
-        const q = `${query} status:solved`;
+        const q = `${query} status:solved order:latest`;
         const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
         const topics = data.topics || [];
         if (!topics.length)
