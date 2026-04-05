@@ -1,7 +1,7 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for Roblox Developer Forum and Creator Documentation",
+  "version": "1.4.0",
+  "description": "MCP server for Roblox Developer Forum and Creator Documentation — 22 tools for API reference, DevForum search, status checks, and more",
   "main": "build/index.js",
   "bin": {
     "roblox-devforum-mcp": "./build/index.js"
