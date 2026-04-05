@@ -39,10 +39,10 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: '1.3.0' });
+const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: '1.4.0' });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
-    'User-Agent': 'roblox-devforum-mcp/1.3.0'
+    'User-Agent': 'roblox-devforum-mcp/1.4.0'
 };
 async function fetchJSON(url) {
     const res = await fetch(url, { headers: COMMON_HEADERS });
@@ -71,7 +71,7 @@ async function fetchJSONWithFallback(urls) {
     throw new Error(`All endpoints failed: ${urls.join(', ')}`);
 }
 async function fetchHTML(url) {
-    const res = await fetch(url, { headers: { 'User-Agent': 'roblox-devforum-mcp/1.3.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'roblox-devforum-mcp/1.4.0' } });
     if (res.status === 429)
         throw new Error('Rate limited by server. Please wait and try again.');
     if (res.status === 404)
@@ -150,13 +150,17 @@ function err(e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };
 }
-let apiDumpCache = null;
-async function getApiDump() {
-    if (apiDumpCache)
-        return apiDumpCache;
+let apiDumpFullCache = null;
+async function getApiDumpFull() {
+    if (apiDumpFullCache)
+        return apiDumpFullCache;
     const data = await fetchJSON('https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json');
-    apiDumpCache = data.Classes;
-    return apiDumpCache;
+    apiDumpFullCache = data;
+    return apiDumpFullCache;
+}
+async function getApiDump() {
+    const full = await getApiDumpFull();
+    return full.Classes;
 }
 // ─── Tools ─────────────────────────────────────────────────────────
 server.registerTool('get_announcements', {
@@ -660,6 +664,142 @@ server.registerTool('get_new_posts', {
         ]);
         const text = formatTopics(data.topic_list.topics, data.users, limit);
         return ok(`Newest DevForum topics:\n\n${text}`);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('search_api_member', {
+    title: 'Search API Member',
+    description: 'Search for a property, method, event, or callback by name across ALL Roblox API classes. Useful to find where a member exists or what classes implement a specific interface.',
+    inputSchema: z.object({
+        query: z.string().describe('Member name to search for (e.g. "Touched", "Position", "Destroy")'),
+        member_type: z.enum(['Property', 'Function', 'Event', 'Callback']).optional().describe('Filter by member type'),
+        limit: z.number().min(1).max(50).default(20).describe('Max results')
+    })
+}, async ({ query, member_type, limit }) => {
+    try {
+        const classes = await getApiDump();
+        const lower = query.toLowerCase();
+        const results = [];
+        for (const cls of classes) {
+            const members = (cls.Members || []).filter(m => {
+                if (!m.Name.toLowerCase().includes(lower))
+                    return false;
+                if (member_type && m.MemberType !== member_type)
+                    return false;
+                return true;
+            });
+            for (const m of members) {
+                results.push({ class: cls.Name, member: m });
+            }
+        }
+        if (!results.length)
+            return ok(`No API member matching "${query}" found.`);
+        let text = `API members matching "${query}" (${results.length} found, showing ${Math.min(results.length, limit)}):\n\n`;
+        for (const r of results.slice(0, limit)) {
+            const m = r.member;
+            const tags = m.Tags ? ` [${m.Tags.join(', ')}]` : '';
+            if (m.MemberType === 'Property') {
+                text += `- ${r.class}.${m.Name}: ${m.ValueType?.Name || 'unknown'}${tags}\n`;
+            }
+            else if (m.MemberType === 'Function') {
+                const params = (m.Parameters || []).map(p => `${p.Name}: ${p.Type.Name}${p.Default !== undefined ? '=' + p.Default : ''}`).join(', ');
+                text += `- ${r.class}.${m.Name}(${params}): ${m.ReturnType?.Name || 'void'}${tags}\n`;
+            }
+            else if (m.MemberType === 'Event') {
+                const params = (m.Parameters || []).map(p => `${p.Name}: ${p.Type.Name}`).join(', ');
+                text += `- ${r.class}.${m.Name}(${params})${tags}\n`;
+            }
+            else {
+                text += `- ${r.class}.${m.Name} (${m.MemberType})${tags}\n`;
+            }
+        }
+        return ok(text.trim());
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_enums', {
+    title: 'Get Enums',
+    description: 'List all Roblox API enums (e.g. Material, PartType, ActionType). Returns enum names and item counts.',
+    inputSchema: z.object({
+        filter: z.string().optional().describe('Optional filter to narrow enum names')
+    })
+}, async ({ filter }) => {
+    try {
+        const full = await getApiDumpFull();
+        const enums = full.Enums || [];
+        const filtered = filter
+            ? enums.filter(e => e.Name.toLowerCase().includes(filter.toLowerCase()))
+            : enums;
+        if (!filtered.length)
+            return ok(filter ? `No enums matching "${filter}".` : 'No enums found.');
+        const lines = filtered.map(e => `- ${e.Name} (${(e.Items || []).length} values)`).join('\n');
+        return ok(`Roblox Enums (${filtered.length}${filter ? ' matching "' + filter + '"' : ' total'}):\n\n${lines}`);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_enum_values', {
+    title: 'Get Enum Values',
+    description: 'Get all values for a specific Roblox API enum (e.g. "Material" returns Plastic, Wood, Slate, etc.)',
+    inputSchema: z.object({
+        enum_name: z.string().describe('Enum name (e.g. "Material", "PartType", "AccessType")')
+    })
+}, async ({ enum_name }) => {
+    try {
+        const full = await getApiDumpFull();
+        const enums = full.Enums || [];
+        const en = enums.find(e => e.Name.toLowerCase() === enum_name.toLowerCase());
+        if (!en) {
+            const partials = enums.filter(e => e.Name.toLowerCase().includes(enum_name.toLowerCase())).slice(0, 10);
+            if (partials.length)
+                return ok(`Enum "${enum_name}" not found. Did you mean:\n${partials.map(e => `- ${e.Name}`).join('\n')}`);
+            return ok(`Enum "${enum_name}" not found. Use get_enums to list all available enums.`);
+        }
+        const items = en.Items || [];
+        let text = `# Enum ${en.Name}\nValues: ${items.length}\n\n`;
+        for (const item of items) {
+            text += `- ${item.Name}\n`;
+        }
+        return ok(text.trim());
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_roblox_status', {
+    title: 'Get Roblox Status',
+    description: 'Check the current status of Roblox platform services (website, Studio, API, game servers, etc.)',
+    inputSchema: z.object({})
+}, async () => {
+    try {
+        const data = await fetchJSON('https://status.roblox.com/summary.json');
+        const page = data.page || {};
+        let text = `Roblox Status: ${page.status_indicator || 'unknown'} (${page.status_string || 'unknown'})\n`;
+        text += `Updated: ${page.updated_at ? formatDate(page.updated_at) : 'unknown'}\n\n`;
+        const components = data.components || [];
+        const groups = components.filter(c => c.group_id === null);
+        for (const group of groups) {
+            const statusLabel = group.status === 'operational' ? 'OK' : group.status.toUpperCase();
+            text += `${group.name}: ${statusLabel}\n`;
+            const children = components.filter(c => c.group_id === group.id);
+            for (const child of children) {
+                const childLabel = child.status === 'operational' ? 'OK' : child.status.toUpperCase();
+                text += `  ${child.name}: ${childLabel}\n`;
+            }
+        }
+        const incidents = data.incidents || [];
+        if (incidents.length) {
+            text += `\nActive Incidents:\n`;
+            for (const inc of incidents.slice(0, 5)) {
+                text += `- ${inc.name} (${inc.status})\n`;
+            }
+        }
+        return ok(text.trim());
     }
     catch (e) {
         return err(e);
