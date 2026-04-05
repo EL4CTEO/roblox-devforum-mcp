@@ -777,7 +777,7 @@ server.registerTool('get_roblox_status', {
     inputSchema: z.object({})
 }, async () => {
     try {
-        const data = await fetchJSON('https://status.roblox.com/summary.json');
+        const data = await fetchJSON('https://status.roblox.com/api/v2/summary.json');
         const page = data.page || {};
         let text = `Roblox Status: ${page.status_indicator || 'unknown'} (${page.status_string || 'unknown'})\n`;
         text += `Updated: ${page.updated_at ? formatDate(page.updated_at) : 'unknown'}\n\n`;
