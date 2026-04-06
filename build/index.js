@@ -51,16 +51,23 @@ const CACHE_MAX = 200;
 const CACHE = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 const inflight = new Map();
-async function fetchWithTimeout(url, opts = {}) {
+async function fetchWithTimeout(url, opts = {}, retry = true) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     try {
         const res = await fetch(url, { ...opts, signal: controller.signal });
         clearTimeout(timer);
+        if (retry && (res.status === 502 || res.status === 503 || res.status === 520)) {
+            await new Promise(r => setTimeout(r, 500));
+            return fetchWithTimeout(url, opts, false);
+        }
         return res;
     }
     catch (e) {
         clearTimeout(timer);
+        if (retry && e instanceof Error && (e.name === 'AbortError' || e.message.includes('network'))) {
+            try { return await fetchWithTimeout(url, opts, false); } catch { }
+        }
         throw e;
     }
 }
@@ -175,10 +182,13 @@ function topicLine(t, users) {
     const url = `${DEVFORUM}/t/${t.slug || t.id}/${t.id}`;
     const views = t.views != null ? t.views : 'N/A';
     const replies = t.posts_count ? t.posts_count - 1 : (t.reply_count ?? 0);
-    let author = t.last_poster_username || '';
-    if (!author && users && t.posters?.length) {
+    let author = '';
+    if (users && t.posters?.length) {
         const poster = t.posters[0];
         author = users.get(poster.user_id) || '';
+    }
+    if (!author) {
+        author = t.last_poster_username || '';
     }
     return `\u2022 ${title}\n  Author: ${author || 'unknown'} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
@@ -221,6 +231,7 @@ function err(e) {
 }
 let apiDumpFullCache = null;
 let apiDumpCacheTime = 0;
+let classIndex = null;
 const API_DUMP_TTL = 6 * 60 * 60 * 1000;
 async function getApiDumpFull() {
     const now = Date.now();
@@ -230,6 +241,10 @@ async function getApiDumpFull() {
         const data = await fetchJSON('https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json');
         apiDumpFullCache = data;
         apiDumpCacheTime = now;
+        classIndex = new Map();
+        for (const cls of data.Classes || []) {
+            classIndex.set(cls.Name.toLowerCase(), cls);
+        }
         return apiDumpFullCache;
     }
     catch (e) {
@@ -239,8 +254,11 @@ async function getApiDumpFull() {
     }
 }
 async function getApiDump() {
-    const full = await getApiDumpFull();
-    return full.Classes;
+    await getApiDumpFull();
+    return apiDumpFullCache.Classes;
+}
+function findClass(name) {
+    return classIndex?.get(name.toLowerCase()) || null;
 }
 // ─── Tools ─────────────────────────────────────────────────────────
 server.registerTool('get_announcements', {
@@ -579,7 +597,7 @@ server.registerTool('get_api_docs', {
 }, async ({ class_name, include_inherited }) => {
     try {
         const classes = await getApiDump();
-        const cls = classes.find(c => c.Name.toLowerCase() === class_name.toLowerCase());
+        const cls = findClass(class_name);
         if (!cls) {
             const partials = classes
                 .filter(c => c.Name.toLowerCase().includes(class_name.toLowerCase()))
@@ -1255,7 +1273,7 @@ server.registerTool('get_class_hierarchy', {
 }, async ({ class_name }) => {
     try {
         const classes = await getApiDump();
-        const cls = classes.find(c => c.Name.toLowerCase() === class_name.toLowerCase());
+        const cls = findClass(class_name);
         if (!cls) {
             const partials = classes
                 .filter(c => c.Name.toLowerCase().includes(class_name.toLowerCase()))
