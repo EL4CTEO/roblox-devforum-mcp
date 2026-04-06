@@ -39,26 +39,50 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '2.5.0';
+const VERSION = '3.0.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
     'User-Agent': `roblox-devforum-mcp/${VERSION}`
 };
-async function fetchJSON(url) {
-    const res = await fetch(url, { headers: COMMON_HEADERS });
+const REQUEST_TIMEOUT = 15000;
+const CACHE = new Map();
+const CACHE_TTL = 5 * 60 * 1000;
+async function fetchWithTimeout(url, opts = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    try {
+        const res = await fetch(url, { ...opts, signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+    }
+    catch (e) {
+        clearTimeout(timer);
+        throw e;
+    }
+}
+async function cachedFetchJSON(url, ttl = CACHE_TTL) {
+    const cached = CACHE.get(url);
+    if (cached && (Date.now() - cached.time) < ttl)
+        return cached.data;
+    const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
     if (res.status === 429)
         throw new Error('Rate limited by server. Please wait and try again.');
     if (res.status === 404)
         throw new Error(`Not found: ${url}`);
     if (!res.ok)
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return res.json();
+    const data = await res.json();
+    CACHE.set(url, { data, time: Date.now() });
+    return data;
+}
+async function fetchJSON(url) {
+    return cachedFetchJSON(url);
 }
 async function fetchJSONWithFallback(urls) {
     for (const url of urls) {
         try {
-            const res = await fetch(url, { headers: COMMON_HEADERS });
+            const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
             if (res.status === 429)
                 throw new Error('Rate limited by server. Please wait and try again.');
             if (res.ok)
@@ -72,7 +96,7 @@ async function fetchJSONWithFallback(urls) {
     throw new Error(`All endpoints failed: ${urls.join(', ')}`);
 }
 async function fetchHTML(url) {
-    const res = await fetch(url, { headers: { 'User-Agent': `roblox-devforum-mcp/${VERSION}` } });
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': `roblox-devforum-mcp/${VERSION}` } });
     if (res.status === 429)
         throw new Error('Rate limited by server. Please wait and try again.');
     if (res.status === 404)
@@ -130,7 +154,7 @@ function topicLine(t, users) {
     const date = t.created_at ? formatDate(t.created_at) : 'unknown';
     const title = t.title || t.fancy_title || 'Untitled';
     const url = `${DEVFORUM}/t/${t.slug || t.id}/${t.id}`;
-    const views = t.views ?? 0;
+    const views = t.views != null ? t.views : 'N/A';
     const replies = t.posts_count ? t.posts_count - 1 : (t.reply_count ?? 0);
     let author = t.last_poster_username || '';
     if (!author && users && t.posters?.length) {
@@ -270,11 +294,12 @@ server.registerTool('search_devforum', {
 });
 server.registerTool('get_thread', {
     title: 'Get Thread',
-    description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, accepted answer info, and if solved, the accepted answer excerpt. Use get_post_replies to read full replies.',
+    description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, accepted answer info, and if solved, the accepted answer content. Use get_post_replies to read full replies.',
     inputSchema: z.object({
-        thread_id: z.string().describe('Thread ID or slug')
+        thread_id: z.string().describe('Thread ID or slug'),
+        max_length: z.number().min(500).max(10000).default(5000).describe('Max characters for first post content (truncated if longer)')
     })
-}, async ({ thread_id }) => {
+}, async ({ thread_id, max_length }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json`);
         const firstPost = data.post_stream?.posts?.[0];
@@ -293,7 +318,11 @@ server.registerTool('get_thread', {
         text += `URL: ${DEVFORUM}/t/${data.slug}/${data.id}\n\n`;
         if (firstPost) {
             text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
-            text += strip(firstPost.cooked);
+            let content = strip(firstPost.cooked);
+            if (content.length > max_length) {
+                content = content.slice(0, max_length) + '...';
+            }
+            text += content;
         }
         if (acceptedAnswer && acceptedPostId) {
             text += `\n\n--- Accepted Answer by ${acceptedUser || 'unknown'} (Post #${acceptedPostId}) ---\n`;
@@ -431,7 +460,13 @@ server.registerTool('get_post_replies', {
         }
         let text = `Thread: ${data.title} — Page ${page} of ~${totalPages}\n\n`;
         for (const p of posts) {
-            text += `--- ${p.username} (${formatDate(p.created_at)}) ---\n`;
+            const likes = p.actions_summary?.find((a) => a.id === 2)?.count || 0;
+            const meta = [`Post #${p.post_number}`];
+            if (likes > 0)
+                meta.push(`${likes} like${likes > 1 ? 's' : ''}`);
+            if (p.wiki)
+                meta.push('wiki');
+            text += `--- ${p.username} (${formatDate(p.created_at)}) [${meta.join(', ')}] ---\n`;
             let content = strip(p.cooked);
             if (content.length > max_length) {
                 content = content.slice(0, max_length) + '...';
@@ -473,9 +508,14 @@ server.registerTool('get_user_posts', {
             const posts = data.slice(0, 15);
             if (!posts.length)
                 return ok(`${header}No recent activity.`);
-            const topicIds = [...new Set(posts.map((p) => p.topic_id).filter(Boolean))].slice(0, 10);
             const titleMap = new Map();
-            await Promise.all(topicIds.map(async (id) => {
+            for (const p of posts) {
+                if (p.topic_id && (p.fancy_title || p.raw || p.blurb)) {
+                    titleMap.set(p.topic_id, p.fancy_title || p.raw || p.blurb);
+                }
+            }
+            const missingIds = [...new Set(posts.map((p) => p.topic_id).filter((id) => id && !titleMap.has(id)))].slice(0, 5);
+            await Promise.all(missingIds.map(async (id) => {
                 try {
                     const tData = await fetchJSON(`${DEVFORUM}/t/${id}.json`);
                     if (tData.title)
@@ -671,47 +711,237 @@ server.registerTool('search_community_resources', {
         return err(e);
     }
 });
-server.registerTool('get_categories', {
-    title: 'Get Categories',
-    description: 'List all DevForum categories with ID, slug, name, description, and topic count',
-    inputSchema: z.object({})
-}, async () => {
+const LUAU_STDLIB = {
+    math: {
+        desc: 'Mathematical functions (all angles in radians)',
+        funcs: [
+            { name: 'math.abs(x)', desc: 'Absolute value' },
+            { name: 'math.ceil(x)', desc: 'Round up to integer' },
+            { name: 'math.clamp(x, min, max)', desc: 'Clamp x between min and max' },
+            { name: 'math.floor(x)', desc: 'Round down to integer' },
+            { name: 'math.lerp(a, b, t)', desc: 'Linear interpolation between a and b by t (0-1)' },
+            { name: 'math.max(x, ...)', desc: 'Maximum of all arguments' },
+            { name: 'math.min(x, ...)', desc: 'Minimum of all arguments' },
+            { name: 'math.random([min,] max)', desc: 'Random integer in [min, max] or [1, max] or [0, 1)' },
+            { name: 'math.round(x)', desc: 'Round to nearest integer (ties to even)' },
+            { name: 'math.sign(x)', desc: '-1, 0, or 1' },
+            { name: 'math.sqrt(x)', desc: 'Square root' },
+            { name: 'math.noise(x [, y [, z]])', desc: 'Perlin noise value' },
+            { name: 'math.sin(x)', desc: 'Sine' },
+            { name: 'math.cos(x)', desc: 'Cosine' },
+            { name: 'math.tan(x)', desc: 'Tangent' },
+            { name: 'math.asin(x)', desc: 'Arc sine' },
+            { name: 'math.acos(x)', desc: 'Arc cosine' },
+            { name: 'math.atan2(y, x)', desc: 'Arc tangent of y/x' },
+            { name: 'math.atan(x)', desc: 'Arc tangent' },
+            { name: 'math.log(x [, base])', desc: 'Logarithm' },
+            { name: 'math.exp(x)', desc: 'e^x' },
+            { name: 'math.pi', desc: '3.14159...' },
+            { name: 'math.huge', desc: 'Infinity' },
+            { name: 'math.rad(deg)', desc: 'Degrees to radians' },
+            { name: 'math.deg(rad)', desc: 'Radians to degrees' },
+            { name: 'math.type(x)', desc: '"integer", "float", or nil' },
+            { name: 'math.tointeger(x)', desc: 'Convert to integer or nil' }
+        ]
+    },
+    string: {
+        desc: 'String manipulation functions',
+        funcs: [
+            { name: 'string.byte(s [, i [, j]])', desc: 'Return byte values of characters' },
+            { name: 'string.char(...)', desc: 'Build string from byte values' },
+            { name: 'string.find(s, pattern [, init [, plain]])', desc: 'Find pattern in string, returns start, end, captures' },
+            { name: 'string.format(s, ...)', desc: 'Printf-style formatting (%s, %d, %f, %x, %o, %e, %g, %q, %i, %u)' },
+            { name: 'string.gmatch(s, pattern)', desc: 'Iterator over all pattern matches' },
+            { name: 'string.gsub(s, pattern, repl [, n])', desc: 'Global substitution, returns modified string + count' },
+            { name: 'string.len(s)', desc: 'String length' },
+            { name: 'string.lower(s)', desc: 'Lowercase' },
+            { name: 'string.upper(s)', desc: 'Uppercase' },
+            { name: 'string.match(s, pattern [, init])', desc: 'First pattern match, returns captures' },
+            { name: 'string.rep(s, n [, sep])', desc: 'Repeat string n times with optional separator' },
+            { name: 'string.reverse(s)', desc: 'Reverse string' },
+            { name: 'string.sub(s, i [, j])', desc: 'Substring (1-indexed, negative counts from end)' },
+            { name: 'string.split(s, sep)', desc: 'Split string by separator into table' },
+            { name: 'string.pack(fmt, ...)', desc: 'Binary pack values into string' },
+            { name: 'string.unpack(fmt, s [, pos])', desc: 'Unpack binary string' },
+            { name: 'string.packsize(fmt)', desc: 'Size of packed string for format' },
+            { name: 'string.trim(s)', desc: 'Remove leading/trailing whitespace (Luau)' },
+            { name: 'string.escapepattern(s)', desc: 'Escape magic pattern characters (Luau)' }
+        ]
+    },
+    table: {
+        desc: 'Table manipulation functions',
+        funcs: [
+            { name: 'table.concat(t [, sep [, i [, j]]])', desc: 'Join table elements into string' },
+            { name: 'table.insert(t, [pos,] value)', desc: 'Insert value at position (default end)' },
+            { name: 'table.remove(t [, pos])', desc: 'Remove and return element at position (default last)' },
+            { name: 'table.sort(t [, comp])', desc: 'Sort in-place using comparator' },
+            { name: 'table.find(t, value [, init])', desc: 'Find value in array, return index or nil (Luau)' },
+            { name: 'table.clear(t)', desc: 'Remove all elements (Luau)' },
+            { name: 'table.clone(t)', desc: 'Shallow copy (Luau)' },
+            { name: 'table.freeze(t)', desc: 'Make table read-only (Luau)' },
+            { name: 'table.isfrozen(t)', desc: 'Check if frozen (Luau)' },
+            { name: 'table.getn(t)', desc: 'Array length (deprecated, use #t)' },
+            { name: 'table.create(n [, value])', desc: 'Create array of n elements (Luau)' },
+            { name: 'table.move(a1, f, e, t [, a2])', desc: 'Move elements between tables' },
+            { name: 'table.unpack(t [, i [, j]])', desc: 'Return elements as multiple values' },
+            { name: 'table.pack(...)', desc: 'Pack arguments into table with .n field' }
+        ]
+    },
+    task: {
+        desc: 'Task scheduling (replaces spawn/delay/coroutine.wrap for most uses)',
+        funcs: [
+            { name: 'task.spawn(f, ...)', desc: 'Run function in new thread immediately' },
+            { name: 'task.defer(f, ...)', desc: 'Run function in new thread at next deferred step' },
+            { name: 'task.delay(t, f, ...)', desc: 'Run function after t seconds' },
+            { name: 'task.wait([t])', desc: 'Yield for t seconds (default 0 = next frame). Returns actual delta.' },
+            { name: 'task.cancel(thread)', desc: 'Cancel a running thread' },
+            { name: 'task.synchronize()', desc: 'Begin synchronized section (parallel Luau)' },
+            { name: 'task.desynchronize()', desc: 'Begin desynchronized section (parallel Luau)' }
+        ]
+    },
+    coroutine: {
+        desc: 'Coroutine functions',
+        funcs: [
+            { name: 'coroutine.create(f)', desc: 'Create coroutine from function' },
+            { name: 'coroutine.resume(co, ...)', desc: 'Resume coroutine, pass arguments' },
+            { name: 'coroutine.running()', desc: 'Return current running coroutine' },
+            { name: 'coroutine.status(co)', desc: 'Status: suspended, running, normal, dead' },
+            { name: 'coroutine.wrap(f)', desc: 'Create coroutine, return resume function' },
+            { name: 'coroutine.yield(...)', desc: 'Suspend coroutine, pass values to resume' },
+            { name: 'coroutine.close(co)', desc: 'Close coroutine and run all to-be-closed vars (Luau)' }
+        ]
+    },
+    os: {
+        desc: 'Operating system functions',
+        funcs: [
+            { name: 'os.clock()', desc: 'High-precision elapsed time in seconds' },
+            { name: 'os.date([fmt [, time]])', desc: 'Format date string. "*t" returns table.' },
+            { name: 'os.difftime(t2, t1)', desc: 'Difference in seconds' },
+            { name: 'os.time([table])', desc: 'Current time or table to epoch seconds' }
+        ]
+    },
+    utf8: {
+        desc: 'UTF-8 string support',
+        funcs: [
+            { name: 'utf8.char(...)', desc: 'Build string from codepoints' },
+            { name: 'utf8.codepoint(s [, i [, j]])', desc: 'Return codepoints' },
+            { name: 'utf8.len(s [, i [, j]])', desc: 'Length in codepoints' },
+            { name: 'utf8.offset(s, n [, i])', desc: 'Byte offset of n-th codepoint' },
+            { name: 'utf8.graphemes(s [, i [, j]])', desc: 'Iterator over grapheme clusters (Luau)' },
+            { name: 'utf8.nfcnormalize(s)', desc: 'NFC normalize (Luau)' },
+            { name: 'utf8.nfdnormalize(s)', desc: 'NFD normalize (Luau)' },
+            { name: 'utf8.pattern', desc: 'Pattern matching a single UTF-8 byte sequence' }
+        ]
+    },
+    bit32: {
+        desc: 'Bitwise operations (32-bit integers)',
+        funcs: [
+            { name: 'bit32.band(...)', desc: 'Bitwise AND' },
+            { name: 'bit32.bnot(x)', desc: 'Bitwise NOT' },
+            { name: 'bit32.bor(...)', desc: 'Bitwise OR' },
+            { name: 'bit32.bxor(...)', desc: 'Bitwise XOR' },
+            { name: 'bit32.btest(...)', desc: 'True if AND result is non-zero' },
+            { name: 'bit32.extract(n, field [, width])', desc: 'Extract bits' },
+            { name: 'bit32.replace(n, v, field [, width])', desc: 'Replace bits' },
+            { name: 'bit32.countlz(x)', desc: 'Count leading zeros (Luau)' },
+            { name: 'bit32.countrz(x)', desc: 'Count trailing zeros (Luau)' },
+            { name: 'bit32.lshift(x, disp)', desc: 'Left shift' },
+            { name: 'bit32.rshift(x, disp)', desc: 'Logical right shift' },
+            { name: 'bit32.arshift(x, disp)', desc: 'Arithmetic right shift' },
+            { name: 'bit32.lrotate(x, disp)', desc: 'Left rotate' },
+            { name: 'bit32.rrotate(x, disp)', desc: 'Right rotate' }
+        ]
+    },
+    debug: {
+        desc: 'Debug functions',
+        funcs: [
+            { name: 'debug.traceback([msg [, level]])', desc: 'Stack traceback string' },
+            { name: 'debug.info(f, options)', desc: 'Get function info: "s" source, "l" line, "n" name, "a" args (Luau)' },
+            { name: 'debug.profilebegin(label)', desc: 'Start profiler label (Roblox)' },
+            { name: 'debug.profileend()', desc: 'End profiler label (Roblox)' },
+            { name: 'debug.setmemorycategory(label)', desc: 'Set memory category (Roblox)' },
+            { name: 'debug.resetmemorycategory()', desc: 'Reset memory category (Roblox)' }
+        ]
+    }
+};
+server.registerTool('get_creator_docs', {
+    title: 'Get Creator Docs',
+    description: 'Fetch documentation from the Roblox Creator Hub (create.roblox.com). Use for official guides, tutorials, and API references. For DevForum discussions, use search_devforum instead.',
+    inputSchema: z.object({
+        path: z.string().describe('Doc path (e.g. "docs/reference/engine/classes/BasePart" or "docs/production/publishing/publishing-experience")')
+    })
+}, async ({ path }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/categories.json`);
-        const cats = data.category_list?.categories || [];
-        let siteCats = null;
-        try {
-            const siteData = await fetchJSON(`${DEVFORUM}/site.json`);
-            const all = siteData.categories || [];
-            siteCats = new Map(all.map((c) => [c.id, c]));
+        const cleanPath = path.replace(/^\/+|\/+$/g, '');
+        const url = `${CREATOR_DOCS}/${cleanPath}`;
+        const html = await fetchHTML(url);
+        let content = strip(html);
+        const mainMatch = content.match(/Skip to main content([\s\S]+)/i);
+        if (mainMatch)
+            content = mainMatch[1].trim();
+        if (content.length > 8000) {
+            content = content.slice(0, 8000) + '\n\n... (truncated, page content exceeds limit)';
         }
-        catch { }
-        const lines = cats.map((c) => {
-            const desc = c.description_text ? ` \u2014 ${c.description_text.slice(0, 100)}` : '';
-            let topicCount = c.topic_count;
-            if (!topicCount && siteCats) {
-                const subs = [...siteCats.values()].filter((s) => s.parent_category_id === c.id);
-                topicCount = subs.reduce((sum, s) => sum + (s.topic_count || 0), 0);
-            }
-            return `\u2022 ${c.name} (ID: ${c.id}, slug: ${c.slug})${desc}\n  Topics: ${topicCount || 0}`;
-        }).join('\n\n');
-        return ok(`DevForum Categories:\n\n${lines}`);
+        if (content.length < 100) {
+            return ok(`Page returned minimal content (likely JavaScript-rendered). Try fetching via web reader.\nURL: ${url}`);
+        }
+        return ok(`Creator Hub Docs: ${cleanPath}\nURL: ${url}\n\n${content}`);
     }
     catch (e) {
         return err(e);
     }
 });
-server.registerTool('get_tags', {
-    title: 'Get Tags',
-    description: 'List all available DevForum tags with topic counts',
-    inputSchema: z.object({})
-}, async () => {
+server.registerTool('search_creator_docs', {
+    title: 'Search Creator Docs',
+    description: 'Search the Roblox Creator Hub documentation for guides, tutorials, and references. For community resources/tutorials from the DevForum, use search_community_resources instead.',
+    inputSchema: z.object({
+        query: z.string().describe('Search query'),
+        limit: z.number().min(1).max(20).default(10).describe('Max results')
+    })
+}, async ({ query, limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/tags.json`);
-        const tags = data.tags || [];
-        const sorted = tags.sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 100);
-        const lines = sorted.map((t) => `\u2022 ${t.name} (${t.count} topics)`).join('\n');
-        return ok(`DevForum Tags (top 100 by topic count):\n\n${lines}`);
+        const searchQ = `${query} #docs order:latest`;
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
+        const topics = data.topics || [];
+        let results = '';
+        if (topics.length) {
+            const userMap = searchUserMap(data);
+            const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
+            results += `DevForum #docs results for "${query}":\n\n${lines}\n\n`;
+        }
+        const creatorUrl = `${CREATOR_DOCS}/docs?search=${encodeURIComponent(query)}`;
+        results += `Also try the Creator Hub search: ${creatorUrl}`;
+        if (!results) {
+            results = `No results found for "${query}". Try: ${creatorUrl}`;
+        }
+        return ok(results);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_luau_docs', {
+    title: 'Get Luau Docs',
+    description: 'Get Luau standard library reference for built-in modules. Covers math, string, table, task, coroutine, os, utf8, bit32, debug.',
+    inputSchema: z.object({
+        library: z.string().describe('Library name (e.g. "math", "string", "table", "task", "coroutine", "os", "utf8", "bit32", "debug")')
+    })
+}, async ({ library }) => {
+    try {
+        const lib = LUAU_STDLIB[library.toLowerCase()];
+        if (!lib) {
+            const available = Object.keys(LUAU_STDLIB).join(', ');
+            const partial = Object.keys(LUAU_STDLIB).filter(k => k.includes(library.toLowerCase()));
+            if (partial.length)
+                return ok(`Library "${library}" not found. Did you mean: ${partial.join(', ')}?\nAvailable: ${available}`);
+            return ok(`Library "${library}" not found. Available: ${available}`);
+        }
+        let text = `# Luau ${library}\n${lib.desc}\n\n`;
+        for (const f of lib.funcs) {
+            text += `- **${f.name}** — ${f.desc}\n`;
+        }
+        text += `\nDocs: ${CREATOR_DOCS}/docs/luau`;
+        return ok(text.trim());
     }
     catch (e) {
         return err(e);
@@ -774,22 +1004,35 @@ server.registerTool('get_category_metadata', {
 });
 server.registerTool('search_bugs', {
     title: 'Search Bugs',
-    description: 'Search for bug reports on the DevForum. One category at a time \u2014 Discourse does not support multiple category filters.',
+    description: 'Search for bug reports on the DevForum. Can search studio-bugs, engine-bugs, or both at once.',
     inputSchema: z.object({
         query: z.string().describe('Search query'),
-        category: z.enum(['studio-bugs', 'engine-bugs']).default('studio-bugs').describe('Bug category'),
+        category: z.enum(['studio-bugs', 'engine-bugs', 'all']).default('all').describe('Bug category'),
         limit: z.number().min(1).max(30).default(10).describe('Max results')
     })
 }, async ({ query, category, limit }) => {
     try {
-        const q = `${query} category:${category} order:latest`;
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
-        const topics = data.topics || [];
+        const categories = category === 'all' ? ['studio-bugs', 'engine-bugs'] : [category];
+        const allTopics = new Map();
+        const allUsers = new Map();
+        await Promise.all(categories.map(async (cat) => {
+            const q = `${query} category:${cat} order:latest`;
+            const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(q)}`);
+            const topics = data.topics || [];
+            for (const t of topics) {
+                if (!allTopics.has(t.id))
+                    allTopics.set(t.id, t);
+            }
+            if (data.users) {
+                for (const u of data.users)
+                    allUsers.set(u.id, u.username);
+            }
+        }));
+        const topics = [...allTopics.values()];
         if (!topics.length)
-            return ok(`No bug reports found for "${query}" in ${category}.`);
-        const userMap = searchUserMap(data);
-        const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
-        return ok(`Bug reports for "${query}" in ${category}:\n\n${lines}`);
+            return ok(`No bug reports found for "${query}"${category === 'all' ? '' : ` in ${category}`}.`);
+        const lines = topics.slice(0, limit).map((t) => topicLine(t, allUsers)).join('\n\n');
+        return ok(`Bug reports for "${query}"${category === 'all' ? '' : ` in ${category}`}:\n\n${lines}`);
     }
     catch (e) {
         return err(e);
@@ -892,16 +1135,32 @@ server.registerTool('search_api_member', {
         return err(e);
     }
 });
-server.registerTool('get_enums', {
-    title: 'Get Enums',
-    description: 'List all Roblox API enums (e.g. Material, PartType, ActionType). Returns enum names and item counts.',
+server.registerTool('get_enum', {
+    title: 'Get Enum',
+    description: 'List or inspect Roblox API enums. If name is provided, returns all values for that enum. If omitted, returns list of all enums.',
     inputSchema: z.object({
-        filter: z.string().optional().describe('Optional filter to narrow enum names')
+        name: z.string().optional().describe('Enum name (e.g. "Material", "PartType"). If omitted, lists all enums.'),
+        filter: z.string().optional().describe('Filter enum names when listing (ignored if name is provided)')
     })
-}, async ({ filter }) => {
+}, async ({ name, filter }) => {
     try {
         const full = await getApiDumpFull();
         const enums = full.Enums || [];
+        if (name) {
+            const en = enums.find(e => e.Name.toLowerCase() === name.toLowerCase());
+            if (!en) {
+                const partials = enums.filter(e => e.Name.toLowerCase().includes(name.toLowerCase())).slice(0, 10);
+                if (partials.length)
+                    return ok(`Enum "${name}" not found. Did you mean:\n${partials.map(e => `- ${e.Name}`).join('\n')}`);
+                return ok(`Enum "${name}" not found. Omit name to list all enums.`);
+            }
+            const items = en.Items || [];
+            let text = `# Enum ${en.Name}\nValues: ${items.length}\n\n`;
+            for (const item of items) {
+                text += `- ${item.Name}\n`;
+            }
+            return ok(text.trim());
+        }
         const filtered = filter
             ? enums.filter(e => e.Name.toLowerCase().includes(filter.toLowerCase()))
             : enums;
@@ -909,34 +1168,6 @@ server.registerTool('get_enums', {
             return ok(filter ? `No enums matching "${filter}".` : 'No enums found.');
         const lines = filtered.map(e => `- ${e.Name} (${(e.Items || []).length} values)`).join('\n');
         return ok(`Roblox Enums (${filtered.length}${filter ? ' matching "' + filter + '"' : ' total'}):\n\n${lines}`);
-    }
-    catch (e) {
-        return err(e);
-    }
-});
-server.registerTool('get_enum_values', {
-    title: 'Get Enum Values',
-    description: 'Get all values for a specific Roblox API enum (e.g. "Material" returns Plastic, Wood, Slate, etc.)',
-    inputSchema: z.object({
-        enum_name: z.string().describe('Enum name (e.g. "Material", "PartType", "AccessType")')
-    })
-}, async ({ enum_name }) => {
-    try {
-        const full = await getApiDumpFull();
-        const enums = full.Enums || [];
-        const en = enums.find(e => e.Name.toLowerCase() === enum_name.toLowerCase());
-        if (!en) {
-            const partials = enums.filter(e => e.Name.toLowerCase().includes(enum_name.toLowerCase())).slice(0, 10);
-            if (partials.length)
-                return ok(`Enum "${enum_name}" not found. Did you mean:\n${partials.map(e => `- ${e.Name}`).join('\n')}`);
-            return ok(`Enum "${enum_name}" not found. Use get_enums to list all available enums.`);
-        }
-        const items = en.Items || [];
-        let text = `# Enum ${en.Name}\nValues: ${items.length}\n\n`;
-        for (const item of items) {
-            text += `- ${item.Name}\n`;
-        }
-        return ok(text.trim());
     }
     catch (e) {
         return err(e);
