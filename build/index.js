@@ -295,23 +295,27 @@ server.registerTool('get_thread', {
             text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
             text += strip(firstPost.cooked);
         }
-        if (acceptedAnswer && acceptedAnswer.excerpt) {
+        if (acceptedAnswer && acceptedPostId) {
             text += `\n\n--- Accepted Answer by ${acceptedUser || 'unknown'} (Post #${acceptedPostId}) ---\n`;
-            if (acceptedAnswer && acceptedAnswer.post_number) {
-                const acceptedPostId = acceptedAnswer.post_number;
-                const acceptedUser = acceptedAnswer.username || null;
-                try {
-                    const postData = await fetchJSON(`${DEVFORUM}/t/${thread_id}/${acceptedPostId}.json`);
-                    const acceptedPost = postData.post_stream?.posts?.[0];
-                    acceptedContent = strip(acceptedPost.cooked);
+            try {
+                const postData = await fetchJSON(`${DEVFORUM}/t/${thread_id}/${acceptedPostId}.json`);
+                const acceptedPost = postData.post_stream?.posts?.[0];
+                if (acceptedPost) {
+                    let acceptedContent = strip(acceptedPost.cooked);
                     if (acceptedContent.length > 3000) {
                         acceptedContent = acceptedContent.slice(0, 3000) + '...';
-                    } catch {
                     }
-                }            if (excerpt.length > 1500) {
-                excerpt = excerpt.slice(0, 1500) + '...';
+                    text += acceptedContent;
+                }
+            } catch {
+                if (acceptedAnswer.excerpt) {
+                    let excerpt = acceptedAnswer.excerpt;
+                    if (excerpt.length > 1500) {
+                        excerpt = excerpt.slice(0, 1500) + '...';
+                    }
+                    text += excerpt;
+                }
             }
-            text += excerpt;
         }
         return ok(text.trim());
     }
