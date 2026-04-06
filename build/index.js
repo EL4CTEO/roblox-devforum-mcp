@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '2.2.0';
+const VERSION = '2.4.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
@@ -297,8 +297,18 @@ server.registerTool('get_thread', {
         }
         if (acceptedAnswer && acceptedAnswer.excerpt) {
             text += `\n\n--- Accepted Answer by ${acceptedUser || 'unknown'} (Post #${acceptedPostId}) ---\n`;
-            let excerpt = acceptedAnswer.excerpt;
-            if (excerpt.length > 1500) {
+            if (acceptedAnswer && acceptedAnswer.post_number) {
+                const acceptedPostId = acceptedAnswer.post_number;
+                const acceptedUser = acceptedAnswer.username || null;
+                try {
+                    const postData = await fetchJSON(`${DEVFORUM}/t/${thread_id}/${acceptedPostId}.json`);
+                    const acceptedPost = postData.post_stream?.posts?.[0];
+                    acceptedContent = strip(acceptedPost.cooked);
+                    if (acceptedContent.length > 3000) {
+                        acceptedContent = acceptedContent.slice(0, 3000) + '...';
+                    } catch {
+                    }
+                }            if (excerpt.length > 1500) {
                 excerpt = excerpt.slice(0, 1500) + '...';
             }
             text += excerpt;
@@ -338,7 +348,7 @@ server.registerTool('get_engine_updates', {
     })
 }, async ({ limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates tag:release order:latest')}`);
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates tag:weekly-recap order:latest')}`);
         const topics = data.topics || [];
         if (topics.length) {
             const userMap = searchUserMap(data);
@@ -375,12 +385,13 @@ server.registerTool('get_top_posts', {
     title: 'Get Top Posts',
     description: 'Get top DevForum posts for a given time period',
     inputSchema: z.object({
-        period: z.enum(['daily', 'weekly', 'monthly', 'yearly', 'all']).describe('Time period')
+        period: z.enum(['daily', 'weekly', 'monthly', 'yearly', 'all']).describe('Time period'),
+        limit: z.number().min(1).max(15).default(15).describe('Max results')
     })
-}, async ({ period }) => {
+}, async ({ period, limit }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/top/${period}.json`);
-        const text = formatTopics(data.topic_list.topics, data.users, 15);
+        const text = formatTopics(data.topic_list.topics, data.users, limit);
         return ok(`Top posts (${period}):\n\n${text}`);
     }
     catch (e) {
@@ -609,8 +620,8 @@ server.registerTool('get_api_docs', {
         return err(e);
     }
 });
-server.registerTool('search_creator_docs', {
-    title: 'Search Creator Docs',
+server.registerTool('search_community_resources', {
+    title: 'Search Community Resources',
     description: 'Search community tutorials and resources from the DevForum Resources and Tutorials categories. NOT the official Creator Hub (create.roblox.com). For official API reference, use get_api_docs instead.',
     inputSchema: z.object({
         query: z.string().describe('Search query'),
