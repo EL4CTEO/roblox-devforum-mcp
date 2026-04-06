@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
@@ -250,15 +250,17 @@ server.registerTool('get_thread', {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json`);
         const firstPost = data.post_stream?.posts?.[0];
-        const solved = data.has_accepted_answer || (data.tags || []).includes('solved') || (data.title || '').includes('[SOLVED]');
-        const acceptedPostId = data.accepted_answer?.post_number || null;
+        const acceptedAnswer = data.accepted_answer;
+        const solved = !!acceptedAnswer || data.has_accepted_answer || (data.tags || []).includes('solved') || (data.title || '').includes('[SOLVED]');
+        const acceptedPostId = acceptedAnswer?.post_number || null;
+        const acceptedUser = acceptedAnswer?.username || null;
         let text = `Title: ${data.title}\n`;
         text += `Author: ${firstPost?.username || 'unknown'} | Date: ${formatDate(data.created_at)}\n`;
         text += `Tags: ${(data.tags || []).join(', ') || 'none'}\n`;
         text += `Replies: ${data.posts_count - 1} | Views: ${data.views}\n`;
         text += `Solved: ${solved ? 'Yes' : 'No'}\n`;
         if (acceptedPostId) {
-            text += `Accepted Answer: Post #${acceptedPostId}\n`;
+            text += `Accepted Answer: Post #${acceptedPostId} by ${acceptedUser || 'unknown'}\n`;
         }
         text += `URL: ${DEVFORUM}/t/${data.slug}/${data.id}\n\n`;
         if (firstPost) {
@@ -300,22 +302,15 @@ server.registerTool('get_engine_updates', {
     })
 }, async ({ limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates tag:release-notes order:latest')}`);
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates tag:release order:latest')}`);
         const topics = data.topics || [];
         if (topics.length) {
             const userMap = searchUserMap(data);
             const lines = topics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
             return ok(`Engine Release Notes:\n\n${lines}`);
         }
-        const fallback = await fetchJSON(`${DEVFORUM}/c/updates/engine-updates/47.json`);
-        const fbTopics = fallback.topic_list?.topics || [];
-        if (fbTopics.length) {
-            const userMap = buildUserMap(fallback.users);
-            const lines = fbTopics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
-            return ok(`Engine Updates:\n\n${lines}`);
-        }
-        const genData = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
-        const text = formatTopics(genData.topic_list.topics, genData.users, limit);
+        const fallback = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
+        const text = formatTopics(fallback.topic_list.topics, fallback.users, limit);
         return ok(`Roblox Updates (general):\n\n${text}`);
     }
     catch (e) {
@@ -362,9 +357,10 @@ server.registerTool('get_post_replies', {
     inputSchema: z.object({
         thread_id: z.string().describe('Thread ID'),
         page: z.number().min(1).default(1).describe('Page number (1-indexed)'),
-        include_op: z.boolean().default(false).describe('Include the original post (post #1) in the output')
+        include_op: z.boolean().default(false).describe('Include the original post (post #1) in the output'),
+        max_length: z.number().min(100).max(5000).default(800).describe('Max characters per post (truncated if longer)')
     })
-}, async ({ thread_id, page, include_op }) => {
+}, async ({ thread_id, page, include_op, max_length }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json?page=${page}`);
         let posts = data.post_stream?.posts || [];
@@ -378,7 +374,11 @@ server.registerTool('get_post_replies', {
         let text = `Thread: ${data.title} — Page ${page} of ~${totalPages}\n\n`;
         for (const p of posts) {
             text += `--- ${p.username} (${formatDate(p.created_at)}) ---\n`;
-            text += strip(p.cooked) + '\n\n';
+            let content = strip(p.cooked);
+            if (content.length > max_length) {
+                content = content.slice(0, max_length) + '...';
+            }
+            text += content + '\n\n';
         }
         return ok(text.trim());
     }
@@ -880,26 +880,32 @@ server.registerTool('get_roblox_status', {
     inputSchema: z.object({})
 }, async () => {
     try {
-        const data = await fetchJSON('https://status.roblox.com/api/v2/summary.json');
-        const page = data.page || {};
-        let text = `Roblox Status: ${page.status_indicator || 'unknown'} (${page.status_string || 'unknown'})\n`;
-        text += `Updated: ${page.updated_at ? formatDate(page.updated_at) : 'unknown'}\n\n`;
-        const components = data.components || [];
-        const groups = components.filter(c => c.group_id === null);
-        for (const group of groups) {
-            const statusLabel = group.status === 'operational' ? 'OK' : group.status.toUpperCase();
-            text += `${group.name}: ${statusLabel}\n`;
-            const children = components.filter(c => c.group_id === group.id);
-            for (const child of children) {
-                const childLabel = child.status === 'operational' ? 'OK' : child.status.toUpperCase();
-                text += `  ${child.name}: ${childLabel}\n`;
+        const data = await fetchJSON('https://api.status.io/1.0/status/59db90dbcdeb2f04dadcf16d');
+        const result = data.result || {};
+        const overall = result.status_overall || {};
+        let text = `Roblox Status: ${overall.status || 'unknown'}\n`;
+        text += `Updated: ${overall.updated ? formatDate(overall.updated) : 'unknown'}\n\n`;
+        const statuses = result.status || [];
+        for (const group of statuses) {
+            text += `${group.name}: ${group.status}\n`;
+            const containers = group.containers || [];
+            for (const child of containers) {
+                text += `  ${child.name}: ${child.status}\n`;
             }
         }
-        const incidents = data.incidents || [];
+        const incidents = result.incidents || [];
         if (incidents.length) {
             text += `\nActive Incidents:\n`;
             for (const inc of incidents.slice(0, 5)) {
                 text += `- ${inc.name} (${inc.status})\n`;
+            }
+        }
+        const maintenance = result.maintenance || {};
+        const activeMaint = maintenance.active || [];
+        if (activeMaint.length) {
+            text += `\nActive Maintenance:\n`;
+            for (const m of activeMaint.slice(0, 5)) {
+                text += `- ${m.name} (${m.status})\n`;
             }
         }
         return ok(text.trim());
@@ -916,7 +922,7 @@ server.registerTool('get_release_notes', {
     })
 }, async ({ limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates order:latest tag:release-notes')}`);
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates order:latest tag:release')}`);
         const topics = data.topics || [];
         if (!topics.length) {
             const fallback = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
