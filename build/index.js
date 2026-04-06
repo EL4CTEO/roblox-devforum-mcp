@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
@@ -369,15 +369,22 @@ server.registerTool('get_engine_updates', {
 });
 server.registerTool('get_category', {
     title: 'Get Category',
-    description: 'Get topics from a specific DevForum category by slug and ID',
+    description: 'Get topics from a specific DevForum category by slug and ID. For subcategories, include parent_slug (e.g. scripting-support under help-and-feedback).',
     inputSchema: z.object({
-        slug: z.string().describe('Category slug (e.g. "help-and-feedback")'),
+        slug: z.string().describe('Category slug (e.g. "help-and-feedback", "scripting-support")'),
         category_id: z.number().describe('Category ID number'),
-        limit: z.number().min(1).max(30).default(10).describe('Max topics to return')
+        limit: z.number().min(1).max(30).default(10).describe('Max topics to return'),
+        parent_slug: z.string().optional().describe('Parent category slug for subcategories (e.g. "help-and-feedback" for scripting-support)')
     })
-}, async ({ slug, category_id, limit }) => {
+}, async ({ slug, category_id, limit, parent_slug }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}.json`);
+        let url;
+        if (parent_slug) {
+            url = `${DEVFORUM}/c/${encodeURIComponent(parent_slug)}/${encodeURIComponent(slug)}/${category_id}.json`;
+        } else {
+            url = `${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}.json`;
+        }
+        const data = await fetchJSON(url);
         const text = formatTopics(data.topic_list.topics, data.users, limit);
         return ok(`Topics in "${slug}":\n\n${text}`);
     }
@@ -714,11 +721,21 @@ server.registerTool('get_category_metadata', {
     title: 'Get Category Metadata',
     description: 'Get metadata for a specific DevForum category (name, description, subcategories, moderators, topic count). Returns metadata only, not topics.',
     inputSchema: z.object({
-        category_id: z.number().describe('Category ID number')
+        category_id: z.number().describe('Category ID number'),
+        slug: z.string().optional().describe('Category slug (needed for subcategories)'),
+        parent_slug: z.string().optional().describe('Parent category slug (needed for subcategories)')
     })
-}, async ({ category_id }) => {
+}, async ({ category_id, slug, parent_slug }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/c/${category_id}/show.json`);
+        let url;
+        if (parent_slug && slug) {
+            url = `${DEVFORUM}/c/${encodeURIComponent(parent_slug)}/${encodeURIComponent(slug)}/${category_id}/show.json`;
+        } else if (slug) {
+            url = `${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}/show.json`;
+        } else {
+            url = `${DEVFORUM}/c/${category_id}/show.json`;
+        }
+        const data = await fetchJSON(url);
         const raw = data.category;
         let topicCount = raw.topic_count;
         let postCount = raw.post_count;
