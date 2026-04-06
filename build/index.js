@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
@@ -72,7 +72,7 @@ async function fetchJSONWithFallback(urls) {
     throw new Error(`All endpoints failed: ${urls.join(', ')}`);
 }
 async function fetchHTML(url) {
-    const res = await fetch(url, { headers: { 'User-Agent': 'roblox-devforum-mcp/1.4.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': `roblox-devforum-mcp/${VERSION}` } });
     if (res.status === 429)
         throw new Error('Rate limited by server. Please wait and try again.');
     if (res.status === 404)
@@ -82,7 +82,25 @@ async function fetchHTML(url) {
     return res.text();
 }
 function strip(html) {
-    return html
+    if (!html) return '';
+    let result = html;
+    const codeBlocks = [];
+    result = result.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_, content) => {
+        const idx = codeBlocks.length;
+        let code = content.replace(/<code[^>]*>/gi, '').replace(/<\/code>/gi, '');
+        code = code.replace(/<[^>]+>/g, '');
+        code = code.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        codeBlocks.push(code.trim());
+        return `\n__CODEBLOCK_${idx}__\n`;
+    });
+    result = result.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (_, content) => {
+        const idx = codeBlocks.length;
+        let code = content.replace(/<[^>]+>/g, '');
+        code = code.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        codeBlocks.push(code.trim());
+        return `\`__CODEBLOCK_${idx}__\``;
+    });
+    result = result
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
@@ -94,6 +112,16 @@ function strip(html) {
         .replace(/&#39;/g, "'")
         .replace(/\s+/g, ' ')
         .trim();
+    for (let i = 0; i < codeBlocks.length; i++) {
+        const block = codeBlocks[i];
+        const marker = `__CODEBLOCK_${i}__`;
+        if (result.includes('`' + marker + '`')) {
+            result = result.replace('`' + marker + '`', '`' + block + '`');
+        } else {
+            result = result.replace(marker, '```\n' + block + '\n```');
+        }
+    }
+    return result;
 }
 function formatDate(d) {
     return new Date(d).toISOString().split('T')[0];
@@ -242,7 +270,7 @@ server.registerTool('search_devforum', {
 });
 server.registerTool('get_thread', {
     title: 'Get Thread',
-    description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, and accepted answer info. Use get_post_replies to read replies.',
+    description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, accepted answer info, and if solved, the accepted answer excerpt. Use get_post_replies to read full replies.',
     inputSchema: z.object({
         thread_id: z.string().describe('Thread ID or slug')
     })
@@ -266,6 +294,14 @@ server.registerTool('get_thread', {
         if (firstPost) {
             text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
             text += strip(firstPost.cooked);
+        }
+        if (acceptedAnswer && acceptedAnswer.excerpt) {
+            text += `\n\n--- Accepted Answer by ${acceptedUser || 'unknown'} (Post #${acceptedPostId}) ---\n`;
+            let excerpt = acceptedAnswer.excerpt;
+            if (excerpt.length > 1500) {
+                excerpt = excerpt.slice(0, 1500) + '...';
+            }
+            text += excerpt;
         }
         return ok(text.trim());
     }
@@ -296,7 +332,7 @@ server.registerTool('get_action_required', {
 });
 server.registerTool('get_engine_updates', {
     title: 'Get Engine Updates',
-    description: 'Get the latest Roblox engine and Studio release notes and technical updates. Returns topics tagged with release-notes or engine-related tags. Use get_announcements for general announcements.',
+    description: 'Get the latest Roblox engine and Studio release notes, changelogs, and technical updates. Returns topics tagged with release notes from the Updates category. Covers engine changes, API additions/removals, deprecations, and new features. Use get_announcements for general announcements.',
     inputSchema: z.object({
         limit: z.number().min(1).max(20).default(10).describe('Number of updates to return')
     })
@@ -358,7 +394,7 @@ server.registerTool('get_post_replies', {
         thread_id: z.string().describe('Thread ID'),
         page: z.number().min(1).default(1).describe('Page number (1-indexed)'),
         include_op: z.boolean().default(false).describe('Include the original post (post #1) in the output'),
-        max_length: z.number().min(100).max(5000).default(800).describe('Max characters per post (truncated if longer)')
+        max_length: z.number().min(100).max(5000).default(2000).describe('Max characters per post (truncated if longer)')
     })
 }, async ({ thread_id, page, include_op, max_length }) => {
     try {
@@ -755,7 +791,7 @@ server.registerTool('get_solved_topics', {
 });
 server.registerTool('get_new_posts', {
     title: 'Get New Posts',
-    description: 'Get the newest topics on the DevForum (strictly chronological, includes brand-new threads with 0 replies). Falls back to latest if new topics endpoint requires authentication.',
+    description: 'Get the most recently created topics on the DevForum (strictly chronological by creation date, includes brand-new threads with 0 replies). Different from get_latest_posts which returns popular/curated topics.',
     inputSchema: z.object({
         limit: z.number().min(1).max(30).default(15).describe('Max topics to return')
     })
@@ -909,33 +945,6 @@ server.registerTool('get_roblox_status', {
             }
         }
         return ok(text.trim());
-    }
-    catch (e) {
-        return err(e);
-    }
-});
-server.registerTool('get_release_notes', {
-    title: 'Get Release Notes',
-    description: 'Get recent Roblox release notes and changelogs from the Creator Hub. Covers engine changes, API additions/removals, deprecations, and new features.',
-    inputSchema: z.object({
-        limit: z.number().min(1).max(20).default(5).describe('Number of release notes to return')
-    })
-}, async ({ limit }) => {
-    try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates order:latest tag:release')}`);
-        const topics = data.topics || [];
-        if (!topics.length) {
-            const fallback = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
-            const fbTopics = fallback.topic_list.topics || [];
-            if (!fbTopics.length)
-                return ok('No release notes found.');
-            const userMap = buildUserMap(fallback.users);
-            const lines = fbTopics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
-            return ok(`Recent Engine Updates:\n\n${lines}`);
-        }
-        const userMap = searchUserMap(data);
-        const lines = topics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
-        return ok(`Release Notes:\n\n${lines}`);
     }
     catch (e) {
         return err(e);
