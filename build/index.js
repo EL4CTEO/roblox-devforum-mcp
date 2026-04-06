@@ -187,8 +187,8 @@ function topicLine(t, users) {
         const poster = t.posters[0];
         author = users.get(poster.user_id) || '';
     }
-    if (!author) {
-        author = t.last_poster_username || '';
+    if (!author && t.last_poster_username) {
+        author = t.last_poster_username;
     }
     return `\u2022 ${title}\n  Author: ${author || 'unknown'} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
@@ -232,6 +232,7 @@ function err(e) {
 let apiDumpFullCache = null;
 let apiDumpCacheTime = 0;
 let classIndex = null;
+let memberIndex = null;
 const API_DUMP_TTL = 6 * 60 * 60 * 1000;
 async function getApiDumpFull() {
     const now = Date.now();
@@ -242,8 +243,15 @@ async function getApiDumpFull() {
         apiDumpFullCache = data;
         apiDumpCacheTime = now;
         classIndex = new Map();
+        memberIndex = new Map();
         for (const cls of data.Classes || []) {
             classIndex.set(cls.Name.toLowerCase(), cls);
+            for (const m of cls.Members || []) {
+                const key = m.Name.toLowerCase();
+                if (!memberIndex.has(key))
+                    memberIndex.set(key, []);
+                memberIndex.get(key).push({ class: cls.Name, member: m });
+            }
         }
         return apiDumpFullCache;
     }
@@ -1141,19 +1149,33 @@ server.registerTool('search_api_member', {
     })
 }, async ({ query, member_type, limit }) => {
     try {
-        const classes = await getApiDump();
+        await getApiDump();
         const lower = query.toLowerCase();
         const results = [];
-        for (const cls of classes) {
-            const members = (cls.Members || []).filter(m => {
-                if (!m.Name.toLowerCase().includes(lower))
-                    return false;
-                if (member_type && m.MemberType !== member_type)
-                    return false;
-                return true;
-            });
-            for (const m of members) {
-                results.push({ class: cls.Name, member: m });
+        if (memberIndex) {
+            for (const [name, entries] of memberIndex) {
+                if (!name.includes(lower))
+                    continue;
+                for (const entry of entries) {
+                    if (member_type && entry.member.MemberType !== member_type)
+                        continue;
+                    results.push(entry);
+                }
+            }
+        }
+        else {
+            const classes = await getApiDump();
+            for (const cls of classes) {
+                const members = (cls.Members || []).filter(m => {
+                    if (!m.Name.toLowerCase().includes(lower))
+                        return false;
+                    if (member_type && m.MemberType !== member_type)
+                        return false;
+                    return true;
+                });
+                for (const m of members) {
+                    results.push({ class: cls.Name, member: m });
+                }
             }
         }
         if (!results.length)
