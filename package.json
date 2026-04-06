@@ -1,7 +1,7 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "1.4.0",
-  "description": "MCP server for Roblox Developer Forum and Creator Documentation — 22 tools for API reference, DevForum search, status checks, and more",
+  "version": "3.2.0",
+  "description": "MCP server for Roblox Developer Forum, Creator Hub docs, API Dump, and platform status — 23 tools with __NEXT_DATA__ extraction, search scoring, rate limit resilience",
   "main": "build/index.js",
   "bin": {
     "roblox-devforum-mcp": "./build/index.js"
@@ -10,7 +10,7 @@
     "build": "tsc",
     "start": "node build/index.js"
   },
-  "keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs"],
+  "keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs", "api-dump"],
   "author": "EL4CTEO",
   "license": "UNLICENSED",
   "private": true,
