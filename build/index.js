@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const ANNOTATIONS = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
 const COMMON_HEADERS = {
@@ -939,18 +939,102 @@ server.registerTool('get_creator_docs', {
         const cleanPath = path.replace(/^\/+|\/+$/g, '');
         const url = `${CREATOR_DOCS}/${cleanPath}`;
         const html = await fetchHTML(url);
+        let output = `Creator Hub Docs: ${cleanPath}\nURL: ${url}\n\n`;
+        const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+        if (nextDataMatch) {
+            try {
+                const nextData = JSON.parse(nextDataMatch[1]);
+                const pageData = nextData?.props?.pageProps?.data;
+                if (pageData) {
+                    const apiRef = pageData.apiReference;
+                    if (apiRef) {
+                        output += `# ${apiRef.name || cleanPath}\n`;
+                        if (apiRef.type)
+                            output += `Type: ${apiRef.type}\n`;
+                        if (apiRef.memoryCategory)
+                            output += `Memory Category: ${apiRef.memoryCategory}\n`;
+                        if (apiRef.summary) {
+                            output += `\n## Summary\n${apiRef.summary.trim()}\n`;
+                        }
+                        if (apiRef.description) {
+                            output += `\n## Description\n${apiRef.description.trim()}\n`;
+                        }
+                        const members = apiRef.members;
+                        if (members && Array.isArray(members)) {
+                            const props = members.filter(m => m.memberType === 'Property' || m.memberType === 'property');
+                            const methods = members.filter(m => m.memberType === 'Function' || m.memberType === 'function' || m.memberType === 'Method' || m.memberType === 'method');
+                            const events = members.filter(m => m.memberType === 'Event' || m.memberType === 'event');
+                            const callbacks = members.filter(m => m.memberType === 'Callback' || m.memberType === 'callback');
+                            if (props.length) {
+                                output += `\n## Properties (${props.length})\n`;
+                                for (const p of props) {
+                                    const tags = p.tags?.length ? ` [${p.tags.join(', ')}]` : '';
+                                    output += `- **${p.name}**: ${p.dataType?.name || p.valueType?.name || 'unknown'}${tags}`;
+                                    if (p.summary) output += ` — ${p.summary.trim()}`;
+                                    output += '\n';
+                                }
+                            }
+                            if (methods.length) {
+                                output += `\n## Methods (${methods.length})\n`;
+                                for (const m of methods) {
+                                    const params = (m.parameters || m.inputs || []).map(p => `${p.name}: ${p.dataType?.name || p.type?.name || 'any'}`).join(', ');
+                                    const ret = m.returnType || m.outputs?.[0]?.dataType?.name || 'void';
+                                    output += `- **${m.name}**(${params}): ${ret}`;
+                                    if (m.summary) output += ` — ${m.summary.trim()}`;
+                                    output += '\n';
+                                }
+                            }
+                            if (events.length) {
+                                output += `\n## Events (${events.length})\n`;
+                                for (const e of events) {
+                                    const params = (e.parameters || e.inputs || []).map(p => `${p.name}: ${p.dataType?.name || p.type?.name || 'any'}`).join(', ');
+                                    output += `- **${e.name}**(${params})`;
+                                    if (e.summary) output += ` — ${e.summary.trim()}`;
+                                    output += '\n';
+                                }
+                            }
+                            if (callbacks.length) {
+                                output += `\n## Callbacks (${callbacks.length})\n`;
+                                for (const c of callbacks) {
+                                    output += `- **${c.name}**`;
+                                    if (c.summary) output += ` — ${c.summary.trim()}`;
+                                    output += '\n';
+                                }
+                            }
+                        }
+                        const subClasses = apiRef.subclasses || apiRef.children;
+                        if (subClasses?.length) {
+                            output += `\n## Subclasses\n${subClasses.map(s => typeof s === 'string' ? `- ${s}` : `- ${s.name}`).join('\n')}\n`;
+                        }
+                        if (output.length > 12000) {
+                            output = output.slice(0, 12000) + '\n\n... (truncated)';
+                        }
+                        return ok(output.trim());
+                    }
+                    const pageContent = pageData.content || pageData.body || pageData.html || pageData.text;
+                    if (pageContent) {
+                        let text = typeof pageContent === 'string' ? pageContent : JSON.stringify(pageContent, null, 2);
+                        if (text.length > 8000) text = text.slice(0, 8000) + '\n\n... (truncated)';
+                        output += text;
+                        return ok(output.trim());
+                    }
+                    if (pageData.title || pageData.name) {
+                        output += `# ${pageData.title || pageData.name}\n`;
+                        if (pageData.description) output += `${pageData.description}\n`;
+                        if (pageData.summary) output += `${pageData.summary}\n`;
+                        const keys = Object.keys(pageData).filter(k => !['title', 'name', 'description', 'summary'].includes(k) && pageData[k] != null);
+                        if (keys.length) {
+                            output += `\nAvailable data fields: ${keys.join(', ')}\n`;
+                        }
+                        return ok(output.trim());
+                    }
+                }
+            } catch { }
+        }
         const metaTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/)?.[1]
             || html.match(/<title>([^<]+)<\/title>/)?.[1] || '';
         const metaDesc = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/)?.[1]
             || html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/)?.[1] || '';
-        let jsonLdText = '';
-        const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
-        if (jsonLdMatch) {
-            try {
-                const ld = JSON.parse(jsonLdMatch[1]);
-                if (ld.description) jsonLdText = ld.description;
-            } catch { }
-        }
         let content = strip(html);
         const mainMatch = content.match(/Skip to main content([\s\S]+)/i);
         if (mainMatch)
@@ -959,17 +1043,14 @@ server.registerTool('get_creator_docs', {
             content = content.slice(0, 8000) + '\n\n... (truncated, page content exceeds limit)';
         }
         if (content.length < 100) {
-            let fallback = `Creator Hub page is JavaScript-rendered and cannot be fully fetched.\nURL: ${url}\n`;
-            if (metaTitle)
-                fallback += `Title: ${metaTitle}\n`;
-            if (metaDesc)
-                fallback += `Description: ${metaDesc}\n`;
-            if (jsonLdText)
-                fallback += `\n${jsonLdText}\n`;
-            fallback += `\nTip: Use the web-reader MCP tool to fetch the full rendered page content.`;
+            let fallback = `URL: ${url}\n`;
+            if (metaTitle) fallback += `Title: ${metaTitle}\n`;
+            if (metaDesc) fallback += `Description: ${metaDesc}\n`;
+            fallback += `\nPage content could not be extracted. The page may require JavaScript rendering.`;
             return ok(fallback);
         }
-        return ok(`Creator Hub Docs: ${cleanPath}\nURL: ${url}\n\n${content}`);
+        output += content;
+        return ok(output.trim());
     }
     catch (e) {
         return err(e);
