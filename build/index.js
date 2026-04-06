@@ -41,13 +41,16 @@ const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
 const VERSION = '3.0.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
+const ANNOTATIONS = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
 const COMMON_HEADERS = {
     'Accept': 'application/json',
     'User-Agent': `roblox-devforum-mcp/${VERSION}`
 };
 const REQUEST_TIMEOUT = 15000;
+const CACHE_MAX = 200;
 const CACHE = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
+const inflight = new Map();
 async function fetchWithTimeout(url, opts = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
@@ -65,16 +68,32 @@ async function cachedFetchJSON(url, ttl = CACHE_TTL) {
     const cached = CACHE.get(url);
     if (cached && (Date.now() - cached.time) < ttl)
         return cached.data;
-    const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
-    if (res.status === 429)
-        throw new Error('Rate limited by server. Please wait and try again.');
-    if (res.status === 404)
-        throw new Error(`Not found: ${url}`);
-    if (!res.ok)
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    const data = await res.json();
-    CACHE.set(url, { data, time: Date.now() });
-    return data;
+    if (inflight.has(url))
+        return inflight.get(url);
+    const promise = (async () => {
+        const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
+        if (res.status === 429)
+            throw new Error('Rate limited by server. Please wait and try again.');
+        if (res.status === 404)
+            throw new Error(`Not found: ${url}`);
+        if (!res.ok)
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const data = await res.json();
+        if (CACHE.size >= CACHE_MAX) {
+            const oldest = [...CACHE.entries()].sort((a, b) => a[1].time - b[1].time)[0];
+            if (oldest)
+                CACHE.delete(oldest[0]);
+        }
+        CACHE.set(url, { data, time: Date.now() });
+        return data;
+    })();
+    inflight.set(url, promise);
+    try {
+        return await promise;
+    }
+    finally {
+        inflight.delete(url);
+    }
 }
 async function fetchJSON(url) {
     return cachedFetchJSON(url);
@@ -161,9 +180,6 @@ function topicLine(t, users) {
         const poster = t.posters[0];
         author = users.get(poster.user_id) || '';
     }
-    if (!author && users && t.id) {
-        author = users.get(t.id) || '';
-    }
     return `\u2022 ${title}\n  Author: ${author || 'unknown'} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
 function formatTopics(topics, users, limit) {
@@ -228,6 +244,7 @@ async function getApiDump() {
 }
 // ─── Tools ─────────────────────────────────────────────────────────
 server.registerTool('get_announcements', {
+    annotations: ANNOTATIONS,
     title: 'Get Announcements',
     description: 'Get latest Roblox Developer Forum announcements',
     inputSchema: z.object({
@@ -244,6 +261,7 @@ server.registerTool('get_announcements', {
     }
 });
 server.registerTool('get_latest_posts', {
+    annotations: ANNOTATIONS,
     title: 'Get Latest Posts',
     description: 'Get latest posts from the Roblox Developer Forum (popular/curated mix), optionally filtered by category. For strictly chronological newest posts, use get_new_posts instead.',
     inputSchema: z.object({
@@ -264,6 +282,7 @@ server.registerTool('get_latest_posts', {
     }
 });
 server.registerTool('search_devforum', {
+    annotations: ANNOTATIONS,
     title: 'Search DevForum',
     description: 'Search the Roblox Developer Forum for topics matching a query. Optionally filter by category slug for scoped results.',
     inputSchema: z.object({
@@ -293,6 +312,7 @@ server.registerTool('search_devforum', {
     }
 });
 server.registerTool('get_thread', {
+    annotations: ANNOTATIONS,
     title: 'Get Thread',
     description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, accepted answer info, and if solved, the accepted answer content. Use get_post_replies to read full replies.',
     inputSchema: z.object({
@@ -353,6 +373,7 @@ server.registerTool('get_thread', {
     }
 });
 server.registerTool('get_action_required', {
+    annotations: ANNOTATIONS,
     title: 'Get Action Required',
     description: 'Get DevForum topics marked as requiring creator action, from the Updates category',
     inputSchema: z.object({
@@ -374,6 +395,7 @@ server.registerTool('get_action_required', {
     }
 });
 server.registerTool('get_engine_updates', {
+    annotations: ANNOTATIONS,
     title: 'Get Engine Updates',
     description: 'Get the latest Roblox engine and Studio release notes, changelogs, and technical updates. Returns topics tagged with release notes from the Updates category. Covers engine changes, API additions/removals, deprecations, and new features. Use get_announcements for general announcements.',
     inputSchema: z.object({
@@ -397,6 +419,7 @@ server.registerTool('get_engine_updates', {
     }
 });
 server.registerTool('get_category', {
+    annotations: ANNOTATIONS,
     title: 'Get Category',
     description: 'Get topics from a specific DevForum category by slug and ID. For subcategories, include parent_slug (e.g. scripting-support under help-and-feedback).',
     inputSchema: z.object({
@@ -407,13 +430,13 @@ server.registerTool('get_category', {
     })
 }, async ({ slug, category_id, limit, parent_slug }) => {
     try {
-        let url;
-        if (parent_slug) {
-            url = `${DEVFORUM}/c/${encodeURIComponent(parent_slug)}/${encodeURIComponent(slug)}/${category_id}.json`;
-        } else {
-            url = `${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}.json`;
-        }
-        const data = await fetchJSON(url);
+        const urls = parent_slug
+            ? [
+                `${DEVFORUM}/c/${encodeURIComponent(parent_slug)}/${encodeURIComponent(slug)}/${category_id}.json`,
+                `${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}.json`
+            ]
+            : [`${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}.json`];
+        const data = await fetchJSONWithFallback(urls);
         const text = formatTopics(data.topic_list.topics, data.users, limit);
         return ok(`Topics in "${slug}":\n\n${text}`);
     }
@@ -422,6 +445,7 @@ server.registerTool('get_category', {
     }
 });
 server.registerTool('get_top_posts', {
+    annotations: ANNOTATIONS,
     title: 'Get Top Posts',
     description: 'Get top DevForum posts for a given time period',
     inputSchema: z.object({
@@ -439,6 +463,7 @@ server.registerTool('get_top_posts', {
     }
 });
 server.registerTool('get_post_replies', {
+    annotations: ANNOTATIONS,
     title: 'Get Post Replies',
     description: 'Get replies for a DevForum thread at a specific page. Fetches one page only — never auto-paginates. Use page parameter to navigate through long threads.',
     inputSchema: z.object({
@@ -480,6 +505,7 @@ server.registerTool('get_post_replies', {
     }
 });
 server.registerTool('get_user_posts', {
+    annotations: ANNOTATIONS,
     title: 'Get User Posts',
     description: 'Get recent activity for a DevForum user',
     inputSchema: z.object({
@@ -499,7 +525,7 @@ server.registerTool('get_user_posts', {
             }
         }
         catch { }
-        const res = await fetch(`${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`, { headers: COMMON_HEADERS });
+        const res = await fetchWithTimeout(`${DEVFORUM}/u/${encodeURIComponent(username)}/activity.json`, { headers: COMMON_HEADERS });
         if (!res.ok) {
             return ok(`${header}Could not fetch activity (HTTP ${res.status}). The profile may be private or the username may be incorrect.`);
         }
@@ -543,6 +569,7 @@ server.registerTool('get_user_posts', {
     }
 });
 server.registerTool('get_api_docs', {
+    annotations: ANNOTATIONS,
     title: 'Get API Docs',
     description: 'Get Roblox Creator documentation for an engine class (properties, methods, events, callbacks, inheritance). This is the go-to for any API reference question. Do NOT use search_creator_docs for class reference.',
     inputSchema: z.object({
@@ -672,6 +699,7 @@ server.registerTool('get_api_docs', {
     }
 });
 server.registerTool('search_community_resources', {
+    annotations: ANNOTATIONS,
     title: 'Search Community Resources',
     description: 'Search community tutorials and resources from the DevForum Resources and Tutorials categories. NOT the official Creator Hub (create.roblox.com). For official API reference, use get_api_docs instead.',
     inputSchema: z.object({
@@ -723,7 +751,7 @@ const LUAU_STDLIB = {
             { name: 'math.max(x, ...)', desc: 'Maximum of all arguments' },
             { name: 'math.min(x, ...)', desc: 'Minimum of all arguments' },
             { name: 'math.random([min,] max)', desc: 'Random integer in [min, max] or [1, max] or [0, 1)' },
-            { name: 'math.round(x)', desc: 'Round to nearest integer (ties to even)' },
+            { name: 'math.round(x)', desc: 'Round to nearest integer (ties away from zero)' },
             { name: 'math.sign(x)', desc: '-1, 0, or 1' },
             { name: 'math.sqrt(x)', desc: 'Square root' },
             { name: 'math.noise(x [, y [, z]])', desc: 'Perlin noise value' },
@@ -865,6 +893,7 @@ const LUAU_STDLIB = {
     }
 };
 server.registerTool('get_creator_docs', {
+    annotations: ANNOTATIONS,
     title: 'Get Creator Docs',
     description: 'Fetch documentation from the Roblox Creator Hub (create.roblox.com). Use for official guides, tutorials, and API references. For DevForum discussions, use search_devforum instead.',
     inputSchema: z.object({
@@ -892,6 +921,7 @@ server.registerTool('get_creator_docs', {
     }
 });
 server.registerTool('search_creator_docs', {
+    annotations: ANNOTATIONS,
     title: 'Search Creator Docs',
     description: 'Search the Roblox Creator Hub documentation for guides, tutorials, and references. For community resources/tutorials from the DevForum, use search_community_resources instead.',
     inputSchema: z.object({
@@ -900,19 +930,19 @@ server.registerTool('search_creator_docs', {
     })
 }, async ({ query, limit }) => {
     try {
-        const searchQ = `${query} #docs order:latest`;
+        const searchQ = `${query} order:latest`;
         const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
         const topics = data.topics || [];
         let results = '';
         if (topics.length) {
             const userMap = searchUserMap(data);
             const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
-            results += `DevForum #docs results for "${query}":\n\n${lines}\n\n`;
+            results += `DevForum results for "${query}":\n\n${lines}\n\n`;
         }
         const creatorUrl = `${CREATOR_DOCS}/docs?search=${encodeURIComponent(query)}`;
-        results += `Also try the Creator Hub search: ${creatorUrl}`;
-        if (!results) {
-            results = `No results found for "${query}". Try: ${creatorUrl}`;
+        results += `Creator Hub search: ${creatorUrl}`;
+        if (!topics.length) {
+            results = `No DevForum results for "${query}". Try the Creator Hub: ${creatorUrl}`;
         }
         return ok(results);
     }
@@ -921,6 +951,7 @@ server.registerTool('search_creator_docs', {
     }
 });
 server.registerTool('get_luau_docs', {
+    annotations: ANNOTATIONS,
     title: 'Get Luau Docs',
     description: 'Get Luau standard library reference for built-in modules. Covers math, string, table, task, coroutine, os, utf8, bit32, debug.',
     inputSchema: z.object({
@@ -948,24 +979,19 @@ server.registerTool('get_luau_docs', {
     }
 });
 server.registerTool('get_category_metadata', {
+    annotations: ANNOTATIONS,
     title: 'Get Category Metadata',
     description: 'Get metadata for a specific DevForum category (name, description, subcategories, moderators, topic count). Returns metadata only, not topics.',
     inputSchema: z.object({
-        category_id: z.number().describe('Category ID number'),
-        slug: z.string().optional().describe('Category slug (needed for subcategories)'),
-        parent_slug: z.string().optional().describe('Parent category slug (needed for subcategories)')
+        category_id: z.number().describe('Category ID number')
     })
-}, async ({ category_id, slug, parent_slug }) => {
+}, async ({ category_id }) => {
     try {
-        let url;
-        if (parent_slug && slug) {
-            url = `${DEVFORUM}/c/${encodeURIComponent(parent_slug)}/${encodeURIComponent(slug)}/${category_id}/show.json`;
-        } else if (slug) {
-            url = `${DEVFORUM}/c/${encodeURIComponent(slug)}/${category_id}/show.json`;
-        } else {
-            url = `${DEVFORUM}/c/${category_id}/show.json`;
-        }
-        const data = await fetchJSON(url);
+        const urls = [
+            `${DEVFORUM}/c/${category_id}/show.json`,
+            `${DEVFORUM}/c/${category_id}.json`
+        ];
+        const data = await fetchJSONWithFallback(urls);
         const raw = data.category;
         let topicCount = raw.topic_count;
         let postCount = raw.post_count;
@@ -1003,6 +1029,7 @@ server.registerTool('get_category_metadata', {
     }
 });
 server.registerTool('search_bugs', {
+    annotations: ANNOTATIONS,
     title: 'Search Bugs',
     description: 'Search for bug reports on the DevForum. Can search studio-bugs, engine-bugs, or both at once.',
     inputSchema: z.object({
@@ -1039,6 +1066,7 @@ server.registerTool('search_bugs', {
     }
 });
 server.registerTool('get_solved_topics', {
+    annotations: ANNOTATIONS,
     title: 'Get Solved Topics',
     description: 'Search for solved DevForum topics. PREFERRED tool for debugging \u2014 use this before get_thread or get_post_replies.',
     inputSchema: z.object({
@@ -1065,6 +1093,7 @@ server.registerTool('get_solved_topics', {
     }
 });
 server.registerTool('get_new_posts', {
+    annotations: ANNOTATIONS,
     title: 'Get New Posts',
     description: 'Get the most recently created topics on the DevForum (strictly chronological by creation date, includes brand-new threads with 0 replies). Different from get_latest_posts which returns popular/curated topics.',
     inputSchema: z.object({
@@ -1084,6 +1113,7 @@ server.registerTool('get_new_posts', {
     }
 });
 server.registerTool('search_api_member', {
+    annotations: ANNOTATIONS,
     title: 'Search API Member',
     description: 'Search for a property, method, event, or callback by name across ALL Roblox API classes. Useful to find where a member exists or what classes implement a specific interface.',
     inputSchema: z.object({
@@ -1136,6 +1166,7 @@ server.registerTool('search_api_member', {
     }
 });
 server.registerTool('get_enum', {
+    annotations: ANNOTATIONS,
     title: 'Get Enum',
     description: 'List or inspect Roblox API enums. If name is provided, returns all values for that enum. If omitted, returns list of all enums.',
     inputSchema: z.object({
@@ -1174,6 +1205,7 @@ server.registerTool('get_enum', {
     }
 });
 server.registerTool('get_roblox_status', {
+    annotations: ANNOTATIONS,
     title: 'Get Roblox Status',
     description: 'Check the current status of Roblox platform services (website, Studio, API, game servers, etc.)',
     inputSchema: z.object({})
@@ -1214,6 +1246,7 @@ server.registerTool('get_roblox_status', {
     }
 });
 server.registerTool('get_class_hierarchy', {
+    annotations: ANNOTATIONS,
     title: 'Get Class Hierarchy',
     description: 'Get the full inheritance tree for a Roblox class, showing all parent classes and direct subclasses. Useful for understanding what a class inherits from and what extends it.',
     inputSchema: z.object({
