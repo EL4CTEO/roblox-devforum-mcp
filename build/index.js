@@ -39,10 +39,11 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: '1.4.0' });
+const VERSION = '2.0.0';
+const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const COMMON_HEADERS = {
     'Accept': 'application/json',
-    'User-Agent': 'roblox-devforum-mcp/1.4.0'
+    'User-Agent': `roblox-devforum-mcp/${VERSION}`
 };
 async function fetchJSON(url) {
     const res = await fetch(url, { headers: COMMON_HEADERS });
@@ -151,12 +152,23 @@ function err(e) {
     return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };
 }
 let apiDumpFullCache = null;
+let apiDumpCacheTime = 0;
+const API_DUMP_TTL = 6 * 60 * 60 * 1000;
 async function getApiDumpFull() {
-    if (apiDumpFullCache)
+    const now = Date.now();
+    if (apiDumpFullCache && (now - apiDumpCacheTime) < API_DUMP_TTL)
         return apiDumpFullCache;
-    const data = await fetchJSON('https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json');
-    apiDumpFullCache = data;
-    return apiDumpFullCache;
+    try {
+        const data = await fetchJSON('https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json');
+        apiDumpFullCache = data;
+        apiDumpCacheTime = now;
+        return apiDumpFullCache;
+    }
+    catch (e) {
+        if (apiDumpFullCache)
+            return apiDumpFullCache;
+        throw e;
+    }
 }
 async function getApiDump() {
     const full = await getApiDumpFull();
@@ -181,7 +193,7 @@ server.registerTool('get_announcements', {
 });
 server.registerTool('get_latest_posts', {
     title: 'Get Latest Posts',
-    description: 'Get latest posts from the Roblox Developer Forum, optionally filtered by category',
+    description: 'Get latest posts from the Roblox Developer Forum (popular/curated mix), optionally filtered by category. For strictly chronological newest posts, use get_new_posts instead.',
     inputSchema: z.object({
         limit: z.number().min(1).max(30).default(10).describe('Number of posts to return'),
         category_id: z.number().optional().describe('Optional category ID to filter by')
@@ -201,24 +213,28 @@ server.registerTool('get_latest_posts', {
 });
 server.registerTool('search_devforum', {
     title: 'Search DevForum',
-    description: 'Search the Roblox Developer Forum for topics matching a query',
+    description: 'Search the Roblox Developer Forum for topics matching a query. Optionally filter by category slug for scoped results.',
     inputSchema: z.object({
         query: z.string().describe('Search query'),
+        category: z.string().optional().describe('Optional category to scope search (e.g. "scripting-support", "help-and-feedback", "resources")'),
         limit: z.number().min(1).max(30).default(10).describe('Max results')
     })
-}, async ({ query, limit }) => {
+}, async ({ query, category, limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(query + ' order:latest')}`);
+        let searchQ = query + ' order:latest';
+        if (category)
+            searchQ += ` category:${category}`;
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
         const topics = data.topics || [];
         if (!topics.length)
-            return ok(`No results found for "${query}".`);
+            return ok(`No results found for "${query}"${category ? ` in ${category}` : ''}.`);
         const userMap = searchUserMap(data);
         const lines = topics.slice(0, limit).map((t) => {
             const base = topicLine(t, userMap);
             const solved = t.has_accepted_answer ? ' [SOLVED]' : '';
             return base + solved;
         }).join('\n\n');
-        return ok(`Search results for "${query}":\n\n${lines}`);
+        return ok(`Search results for "${query}"${category ? ` in ${category}` : ''}:\n\n${lines}`);
     }
     catch (e) {
         return err(e);
@@ -226,7 +242,7 @@ server.registerTool('search_devforum', {
 });
 server.registerTool('get_thread', {
     title: 'Get Thread',
-    description: 'Get a specific DevForum thread. Returns the first post (title + content) and reply count. Use get_post_replies to read replies.',
+    description: 'Get a specific DevForum thread. Returns the first post (title + content), reply count, and accepted answer info. Use get_post_replies to read replies.',
     inputSchema: z.object({
         thread_id: z.string().describe('Thread ID or slug')
     })
@@ -234,11 +250,16 @@ server.registerTool('get_thread', {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json`);
         const firstPost = data.post_stream?.posts?.[0];
+        const solved = data.has_accepted_answer || (data.tags || []).includes('solved') || (data.title || '').includes('[SOLVED]');
+        const acceptedPostId = data.accepted_answer?.post_number || null;
         let text = `Title: ${data.title}\n`;
         text += `Author: ${firstPost?.username || 'unknown'} | Date: ${formatDate(data.created_at)}\n`;
         text += `Tags: ${(data.tags || []).join(', ') || 'none'}\n`;
         text += `Replies: ${data.posts_count - 1} | Views: ${data.views}\n`;
-        text += `Solved: ${data.has_accepted_answer ? 'Yes' : 'No'}\n`;
+        text += `Solved: ${solved ? 'Yes' : 'No'}\n`;
+        if (acceptedPostId) {
+            text += `Accepted Answer: Post #${acceptedPostId}\n`;
+        }
         text += `URL: ${DEVFORUM}/t/${data.slug}/${data.id}\n\n`;
         if (firstPost) {
             text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
@@ -273,13 +294,29 @@ server.registerTool('get_action_required', {
 });
 server.registerTool('get_engine_updates', {
     title: 'Get Engine Updates',
-    description: 'Get the latest Roblox engine and Studio updates from the DevForum',
-    inputSchema: z.object({})
-}, async () => {
+    description: 'Get the latest Roblox engine and Studio release notes and technical updates. Returns topics tagged with release-notes or engine-related tags. Use get_announcements for general announcements.',
+    inputSchema: z.object({
+        limit: z.number().min(1).max(20).default(10).describe('Number of updates to return')
+    })
+}, async ({ limit }) => {
     try {
-        const data = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
-        const text = formatTopics(data.topic_list.topics, data.users, 15);
-        return ok(`Roblox Engine & Studio Updates:\n\n${text}`);
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates tag:release-notes order:latest')}`);
+        const topics = data.topics || [];
+        if (topics.length) {
+            const userMap = searchUserMap(data);
+            const lines = topics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
+            return ok(`Engine Release Notes:\n\n${lines}`);
+        }
+        const fallback = await fetchJSON(`${DEVFORUM}/c/updates/engine-updates/47.json`);
+        const fbTopics = fallback.topic_list?.topics || [];
+        if (fbTopics.length) {
+            const userMap = buildUserMap(fallback.users);
+            const lines = fbTopics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
+            return ok(`Engine Updates:\n\n${lines}`);
+        }
+        const genData = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
+        const text = formatTopics(genData.topic_list.topics, genData.users, limit);
+        return ok(`Roblox Updates (general):\n\n${text}`);
     }
     catch (e) {
         return err(e);
@@ -321,18 +358,24 @@ server.registerTool('get_top_posts', {
 });
 server.registerTool('get_post_replies', {
     title: 'Get Post Replies',
-    description: 'Get replies for a DevForum thread at a specific page. Fetches one page only \u2014 never auto-paginates.',
+    description: 'Get replies for a DevForum thread at a specific page. Fetches one page only — never auto-paginates. Use page parameter to navigate through long threads.',
     inputSchema: z.object({
         thread_id: z.string().describe('Thread ID'),
-        page: z.number().min(1).default(1).describe('Page number (1-indexed)')
+        page: z.number().min(1).default(1).describe('Page number (1-indexed)'),
+        include_op: z.boolean().default(false).describe('Include the original post (post #1) in the output')
     })
-}, async ({ thread_id, page }) => {
+}, async ({ thread_id, page, include_op }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json?page=${page}`);
-        const posts = data.post_stream?.posts || [];
+        let posts = data.post_stream?.posts || [];
         if (!posts.length)
             return ok(`No posts found on page ${page}.`);
-        let text = `Thread: ${data.title} \u2014 Page ${page}\n\n`;
+        const totalPosts = data.posts_count || posts.length;
+        const totalPages = Math.ceil(totalPosts / posts.length) || 1;
+        if (!include_op) {
+            posts = posts.filter(p => p.post_number > 1);
+        }
+        let text = `Thread: ${data.title} — Page ${page} of ~${totalPages}\n\n`;
         for (const p of posts) {
             text += `--- ${p.username} (${formatDate(p.created_at)}) ---\n`;
             text += strip(p.cooked) + '\n\n';
@@ -403,11 +446,12 @@ server.registerTool('get_user_posts', {
 });
 server.registerTool('get_api_docs', {
     title: 'Get API Docs',
-    description: 'Get Roblox Creator documentation for an engine class (properties, methods, events)',
+    description: 'Get Roblox Creator documentation for an engine class (properties, methods, events, callbacks, inheritance). This is the go-to for any API reference question. Do NOT use search_creator_docs for class reference.',
     inputSchema: z.object({
-        class_name: z.string().describe('Engine class name (e.g. "BasePart", "Workspace")')
+        class_name: z.string().describe('Engine class name (e.g. "BasePart", "Workspace")'),
+        include_inherited: z.boolean().default(false).describe('Include key inherited members from parent classes')
     })
-}, async ({ class_name }) => {
+}, async ({ class_name, include_inherited }) => {
     try {
         const classes = await getApiDump();
         const cls = classes.find(c => c.Name.toLowerCase() === class_name.toLowerCase());
@@ -480,7 +524,48 @@ server.registerTool('get_api_docs', {
             output += '\n';
         }
         if (cls.Superclass && cls.Superclass !== '<<<ROOT>>>') {
-            output += `\n_Inherited from ${chain.slice(1).join(', ')} \u2014 use get_api_docs with the parent class name for those members._\n`;
+            if (include_inherited) {
+                const IMPORTANT_TAGS = ['Deprecated', 'NotBrowsable', 'Hidden'];
+                const inheritedMembers = [];
+                for (const parentName of chain.slice(1)) {
+                    const parentCls = classes.find(c => c.Name === parentName);
+                    if (!parentCls)
+                        continue;
+                    const parentMembers = (parentCls.Members || []).filter(m => {
+                        if (m.Tags && m.Tags.some(t => IMPORTANT_TAGS.includes(t)))
+                            return false;
+                        return true;
+                    });
+                    for (const m of parentMembers) {
+                        inheritedMembers.push({ class: parentName, member: m });
+                    }
+                }
+                if (inheritedMembers.length > 0) {
+                    const shown = inheritedMembers.slice(0, 80);
+                    output += `\n## Inherited Members (showing ${shown.length} of ${inheritedMembers.length})\n`;
+                    for (const im of shown) {
+                        const m = im.member;
+                        const tags = m.Tags ? ` [${m.Tags.join(', ')}]` : '';
+                        if (m.MemberType === 'Property') {
+                            output += `- ${im.class}.${m.Name}: ${m.ValueType?.Name || 'unknown'}${tags}\n`;
+                        }
+                        else if (m.MemberType === 'Function') {
+                            const params = (m.Parameters || []).map(p => `${p.Name}: ${p.Type.Name}`).join(', ');
+                            output += `- ${im.class}.${m.Name}(${params}): ${m.ReturnType?.Name || 'void'}${tags}\n`;
+                        }
+                        else if (m.MemberType === 'Event') {
+                            const params = (m.Parameters || []).map(p => `${p.Name}: ${p.Type.Name}`).join(', ');
+                            output += `- ${im.class}.${m.Name}(${params})${tags}\n`;
+                        }
+                    }
+                    if (inheritedMembers.length > 80) {
+                        output += `\n_...and ${inheritedMembers.length - 80} more inherited members._\n`;
+                    }
+                }
+            }
+            else {
+                output += `\n_Inherited from ${chain.slice(1).join(', ')} \u2014 use get_api_docs with the parent class name, or set include_inherited=true for those members._\n`;
+            }
         }
         return ok(output);
     }
@@ -490,21 +575,39 @@ server.registerTool('get_api_docs', {
 });
 server.registerTool('search_creator_docs', {
     title: 'Search Creator Docs',
-    description: 'Search community tutorials and resources from the DevForum Resources category. For official Roblox API docs, use get_api_docs instead.',
+    description: 'Search community tutorials and resources from the DevForum Resources and Tutorials categories. NOT the official Creator Hub (create.roblox.com). For official API reference, use get_api_docs instead.',
     inputSchema: z.object({
         query: z.string().describe('Search query'),
         limit: z.number().min(1).max(20).default(10).describe('Max results')
     })
 }, async ({ query, limit }) => {
     try {
-        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
+        const searchQ = `${query} category:resources order:latest`;
+        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
         const topics = devforumData.topics || [];
+        let results = '';
         if (topics.length) {
             const userMap = searchUserMap(devforumData);
             const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
-            return ok(`Creator Docs search for "${query}":\n\n${lines}`);
+            results += `DevForum Resources for "${query}":\n\n${lines}`;
         }
-        return ok(`No results found for "${query}" in Creator Docs.`);
+        if (!results) {
+            const fallbackQ = `${query} category:tutorials order:latest`;
+            try {
+                const fallbackData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(fallbackQ)}`);
+                const fallbackTopics = fallbackData.topics || [];
+                if (fallbackTopics.length) {
+                    const userMap = searchUserMap(fallbackData);
+                    const lines = fallbackTopics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
+                    results += `DevForum Tutorials for "${query}":\n\n${lines}`;
+                }
+            }
+            catch { }
+        }
+        if (!results) {
+            results = `No results found for "${query}" in Creator Docs or tutorials.`;
+        }
+        return ok(results);
     }
     catch (e) {
         return err(e);
@@ -652,7 +755,7 @@ server.registerTool('get_solved_topics', {
 });
 server.registerTool('get_new_posts', {
     title: 'Get New Posts',
-    description: 'Get the newest topics on the DevForum. Falls back to latest if new topics endpoint requires authentication.',
+    description: 'Get the newest topics on the DevForum (strictly chronological, includes brand-new threads with 0 replies). Falls back to latest if new topics endpoint requires authentication.',
     inputSchema: z.object({
         limit: z.number().min(1).max(30).default(15).describe('Max topics to return')
     })
@@ -800,6 +903,89 @@ server.registerTool('get_roblox_status', {
             }
         }
         return ok(text.trim());
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_release_notes', {
+    title: 'Get Release Notes',
+    description: 'Get recent Roblox release notes and changelogs from the Creator Hub. Covers engine changes, API additions/removals, deprecations, and new features.',
+    inputSchema: z.object({
+        limit: z.number().min(1).max(20).default(5).describe('Number of release notes to return')
+    })
+}, async ({ limit }) => {
+    try {
+        const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent('category:updates order:latest tag:release-notes')}`);
+        const topics = data.topics || [];
+        if (!topics.length) {
+            const fallback = await fetchJSON(`${DEVFORUM}/c/updates/36.json`);
+            const fbTopics = fallback.topic_list.topics || [];
+            if (!fbTopics.length)
+                return ok('No release notes found.');
+            const userMap = buildUserMap(fallback.users);
+            const lines = fbTopics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
+            return ok(`Recent Engine Updates:\n\n${lines}`);
+        }
+        const userMap = searchUserMap(data);
+        const lines = topics.slice(0, limit).map(t => topicLine(t, userMap)).join('\n\n');
+        return ok(`Release Notes:\n\n${lines}`);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+server.registerTool('get_class_hierarchy', {
+    title: 'Get Class Hierarchy',
+    description: 'Get the full inheritance tree for a Roblox class, showing all parent classes and direct subclasses. Useful for understanding what a class inherits from and what extends it.',
+    inputSchema: z.object({
+        class_name: z.string().describe('Engine class name (e.g. "BasePart", "RemoteEvent")')
+    })
+}, async ({ class_name }) => {
+    try {
+        const classes = await getApiDump();
+        const cls = classes.find(c => c.Name.toLowerCase() === class_name.toLowerCase());
+        if (!cls) {
+            const partials = classes
+                .filter(c => c.Name.toLowerCase().includes(class_name.toLowerCase()))
+                .slice(0, 10);
+            if (partials.length)
+                return ok(`Class "${class_name}" not found. Did you mean:\n${partials.map(c => `- ${c.Name}`).join('\n')}`);
+            return ok(`Class "${class_name}" not found.`);
+        }
+        const ancestors = [];
+        let current = cls;
+        while (current.Superclass && current.Superclass !== '<<<ROOT>>>') {
+            ancestors.push(current.Superclass);
+            const parent = classes.find(c => c.Name === current.Superclass);
+            if (!parent)
+                break;
+            current = parent;
+        }
+        const subclasses = classes.filter(c => c.Superclass === cls.Name).map(c => c.Name);
+        let output = `# ${cls.Name} Hierarchy\n\n`;
+        if (ancestors.length) {
+            output += `**Ancestors:** ${ancestors.join(' > ')}\n\n`;
+        }
+        else {
+            output += `**Root class** (no ancestors)\n\n`;
+        }
+        if (subclasses.length) {
+            output += `**Subclasses** (${subclasses.length}):\n`;
+            for (const sub of subclasses) {
+                output += `- ${sub}\n`;
+            }
+        }
+        else {
+            output += `**No subclasses** (leaf class)\n`;
+        }
+        const memberCount = (cls.Members || []).length;
+        const props = (cls.Members || []).filter(m => m.MemberType === 'Property').length;
+        const methods = (cls.Members || []).filter(m => m.MemberType === 'Function').length;
+        const events = (cls.Members || []).filter(m => m.MemberType === 'Event').length;
+        output += `\n**Own members:** ${memberCount} (${props} props, ${methods} methods, ${events} events)\n`;
+        output += `\nDocs: ${CREATOR_DOCS}/docs/reference/engine/classes/${cls.Name}\n`;
+        return ok(output.trim());
     }
     catch (e) {
         return err(e);
