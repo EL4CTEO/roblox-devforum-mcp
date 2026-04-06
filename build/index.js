@@ -39,7 +39,7 @@ const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod/v4"));
 const DEVFORUM = 'https://devforum.roblox.com';
 const CREATOR_DOCS = 'https://create.roblox.com';
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 const server = new mcp_js_1.McpServer({ name: 'roblox-devforum-mcp', version: VERSION });
 const ANNOTATIONS = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
 const COMMON_HEADERS = {
@@ -78,12 +78,13 @@ async function cachedFetchJSON(url, ttl = CACHE_TTL) {
     if (inflight.has(url))
         return inflight.get(url);
     const promise = (async () => {
-        const maxRetries = 2;
+        const maxRetries = 3;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
             if (res.status === 429) {
                 if (attempt < maxRetries) {
-                    await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+                    const jitter = Math.random() * 400 - 200;
+                    await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000 + jitter));
                     continue;
                 }
                 throw new Error('Rate limited by server. Please wait and try again.');
