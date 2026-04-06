@@ -78,21 +78,29 @@ async function cachedFetchJSON(url, ttl = CACHE_TTL) {
     if (inflight.has(url))
         return inflight.get(url);
     const promise = (async () => {
-        const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
-        if (res.status === 429)
-            throw new Error('Rate limited by server. Please wait and try again.');
-        if (res.status === 404)
-            throw new Error(`Not found: ${url}`);
-        if (!res.ok)
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        const data = await res.json();
-        if (CACHE.size >= CACHE_MAX) {
-            const oldest = [...CACHE.entries()].sort((a, b) => a[1].time - b[1].time)[0];
-            if (oldest)
-                CACHE.delete(oldest[0]);
+        const maxRetries = 2;
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const res = await fetchWithTimeout(url, { headers: COMMON_HEADERS });
+            if (res.status === 429) {
+                if (attempt < maxRetries) {
+                    await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+                    continue;
+                }
+                throw new Error('Rate limited by server. Please wait and try again.');
+            }
+            if (res.status === 404)
+                throw new Error(`Not found: ${url}`);
+            if (!res.ok)
+                throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+            const data = await res.json();
+            if (CACHE.size >= CACHE_MAX) {
+                const oldest = [...CACHE.entries()].sort((a, b) => a[1].time - b[1].time)[0];
+                if (oldest)
+                    CACHE.delete(oldest[0]);
+            }
+            CACHE.set(url, { data, time: Date.now() });
+            return data;
         }
-        CACHE.set(url, { data, time: Date.now() });
-        return data;
     })();
     inflight.set(url, promise);
     try {
@@ -930,6 +938,18 @@ server.registerTool('get_creator_docs', {
         const cleanPath = path.replace(/^\/+|\/+$/g, '');
         const url = `${CREATOR_DOCS}/${cleanPath}`;
         const html = await fetchHTML(url);
+        const metaTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/)?.[1]
+            || html.match(/<title>([^<]+)<\/title>/)?.[1] || '';
+        const metaDesc = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/)?.[1]
+            || html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/)?.[1] || '';
+        let jsonLdText = '';
+        const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+        if (jsonLdMatch) {
+            try {
+                const ld = JSON.parse(jsonLdMatch[1]);
+                if (ld.description) jsonLdText = ld.description;
+            } catch { }
+        }
         let content = strip(html);
         const mainMatch = content.match(/Skip to main content([\s\S]+)/i);
         if (mainMatch)
@@ -938,7 +958,15 @@ server.registerTool('get_creator_docs', {
             content = content.slice(0, 8000) + '\n\n... (truncated, page content exceeds limit)';
         }
         if (content.length < 100) {
-            return ok(`Page returned minimal content (likely JavaScript-rendered). Try fetching via web reader.\nURL: ${url}`);
+            let fallback = `Creator Hub page is JavaScript-rendered and cannot be fully fetched.\nURL: ${url}\n`;
+            if (metaTitle)
+                fallback += `Title: ${metaTitle}\n`;
+            if (metaDesc)
+                fallback += `Description: ${metaDesc}\n`;
+            if (jsonLdText)
+                fallback += `\n${jsonLdText}\n`;
+            fallback += `\nTip: Use the web-reader MCP tool to fetch the full rendered page content.`;
+            return ok(fallback);
         }
         return ok(`Creator Hub Docs: ${cleanPath}\nURL: ${url}\n\n${content}`);
     }
@@ -956,11 +984,19 @@ server.registerTool('search_creator_docs', {
     })
 }, async ({ query, limit }) => {
     try {
+        const DOC_CATEGORIES = ['resources', 'tutorials', 'updates', 'announcements', 'scripting-support', 'help-and-feedback'];
         const searchQ = `${query} order:latest`;
         const data = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(searchQ)}`);
-        const topics = data.topics || [];
+        let topics = data.topics || [];
         let results = '';
         if (topics.length) {
+            const scored = topics.map(t => ({
+                t,
+                score: (DOC_CATEGORIES.some(cat => (t.category_slug || '').includes(cat)) ? 10 : 0)
+                    + (t.has_accepted_answer ? 5 : 0)
+                    + ((t.like_count || 0) > 0 ? 3 : 0)
+            })).sort((a, b) => b.score - a.score);
+            topics = scored.map(s => s.t);
             const userMap = searchUserMap(data);
             const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join('\n\n');
             results += `DevForum results for "${query}":\n\n${lines}\n\n`;
