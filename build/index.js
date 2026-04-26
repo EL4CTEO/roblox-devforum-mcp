@@ -376,21 +376,32 @@ function flattenDocBody(body) {
 async function getLuauDoc(libraryName) {
     try {
         const html = await fetchHTML("https://luau-lang.org/library");
-        const sectionStart = html.indexOf(`${libraryName} library`);
+        const sectionHeader = `${libraryName} library`;
+        const sectionStart = html.indexOf(sectionHeader);
         if (sectionStart === -1) {
             const available = ["math", "table", "string", "coroutine", "bit32", "utf8", "os", "debug", "buffer", "vector"];
             return `Library "${libraryName}" not found.\nAvailable: ${available.join(", ")}.`;
         }
-        const nextSection = html.indexOf(" library", sectionStart + 20);
-        const sectionEnd = nextSection > sectionStart ? nextSection : Math.min(sectionStart + 5000, html.length);
+        // Find next section by looking for the second occurrence of " library" after a gap
+        let sectionEnd = html.length;
+        const allLibs = ["math", "table", "string", "coroutine", "bit32", "utf8", "os", "debug", "buffer", "vector"];
+        for (const lib of allLibs) {
+            if (lib === libraryName)
+                continue;
+            const idx = html.indexOf(`${lib} library`, sectionStart + sectionHeader.length);
+            if (idx > sectionStart && idx < sectionEnd)
+                sectionEnd = idx;
+        }
         const section = html.substring(sectionStart, sectionEnd);
-        const functions = [...section.matchAll(/function\s+([\w.]+)\(([^)]*)\)(?::\s*([^\n]+))?/gi)];
+        // Extract function signatures from the stripped text
+        const text = strip(section);
+        const functions = [...text.matchAll(/function\s+([\w.]+)\(([^)]*)\)\s*(?::\s*([^\n]+))?/gi)];
         let out = `# Luau ${libraryName} library\n\n`;
         for (const m of functions) {
-            out += `- **${m[1]}**(${m[2]})${m[3] ? ": " + m[3] : ""}\n`;
+            out += `- **${m[1]}**(${m[2]})${m[3] ? ": " + m[3].trim() : ""}\n`;
         }
         if (!functions.length)
-            out += strip(section.substring(0, 3000));
+            out += text.substring(0, 3000);
         return out;
     }
     catch (e) {
