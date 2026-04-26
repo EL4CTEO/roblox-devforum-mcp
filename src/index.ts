@@ -289,12 +289,34 @@ interface StatusPage {
   incidents: any[];
 }
 
+function parseStatusHtml(html: string): StatusPage {
+  const components: StatusComponent[] = [];
+  const incidents: any[] = [];
+  const sectionRe = /<div[^>]*class="[^"]*component[^"]*"[^>]*>[\s\S]*?<\/div>/gi;
+  const nameRe = /<span[^>]*class="[^"]*name[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
+  const statusRe = /<span[^>]*class="[^"]*value[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
+  for (const block of html.match(sectionRe) || []) {
+    const name = (block.match(nameRe) || [])[1]?.trim();
+    const status = (block.match(statusRe) || [])[1]?.trim();
+    if (name && status) components.push({ name, status });
+  }
+  const incRe = /<div[^>]*class="[^"]*incident[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+  for (const incBlock of html.match(incRe) || []) {
+    const incName = (incBlock.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i) || [])[1]?.trim();
+    const incStatus = (incBlock.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i) || [])[1]?.trim();
+    if (incName) incidents.push({ name: incName, status: incStatus || "unknown" });
+  }
+  return { page: { name: "Roblox", url: "https://status.roblox.com" }, components, incidents };
+}
+
 async function getRobloxStatusData(): Promise<StatusPage> {
-  const data = await fetchJSONCached(
-    "https://kctbh9vrtdwd.statuspage.io/api/v2/components.json",
-    { etag: true }
-  );
-  return data as StatusPage;
+  try {
+    const res = await httpFetch("https://status.roblox.com", { json: false });
+    const html = await res.text();
+    return parseStatusHtml(html);
+  } catch {
+    return { page: { name: "Roblox", url: "https://status.roblox.com" }, components: [], incidents: [] };
+  }
 }
 
 // ─── API Dump (with conditional caching) ────────────────────────
@@ -467,9 +489,22 @@ async function siteSearch(ddg: string, query: string): Promise<SearchResult[]> {
 
 // ─── Creator Store search ──────────────────────────────────────
 
+function fmtTags(tags: any[] | undefined): string {
+  if (!tags || !tags.length) return "";
+  const flat = tags.map((t: any) => {
+    if (typeof t === "string") return t;
+    if (typeof t === "object" && t !== null) {
+      const parts = Object.entries(t).map(([k, v]) => `${k}: ${v}`);
+      return parts.join("; ");
+    }
+    return String(t);
+  });
+  return ` [${flat.join(", ")}]`;
+}
+
 const VALID_LIMITS = [10, 28, 30, 50, 60, 100, 120];
 function normalizeLimit(n: number): number {
-  return VALID_LIMITS.find((v) => v >= n) || 10;
+  return VALID_LIMITS.find((v: number) => v >= n) || 10;
 }
 
 async function searchCreatorStore({ query, assetType, limit }: { query: string; assetType?: string; limit: number }): Promise<any[]> {
@@ -609,17 +644,15 @@ SERVER.registerTool(
       }
 
       // Accepted answer
-      if (data.has_accepted_answer && data.post_stream?.stream) {
-        const acceptedId = data.post_stream.accepted_answer_post_id;
-        if (!acceptedId && include_op) {
-          // accepted_answer may not expose post_id in some versions
-        }
-        // Search for accepted post
-        const allPosts = data.post_stream.posts || [];
-        const acceptedPost = allPosts.find((p: any) => p.is_accepted_answer || p.post_number === acceptedId);
+      const hasAccepted = data.has_accepted_answer || data.post_stream?.posts?.some((p: any) => p.accepted_answer);
+      if (hasAccepted) {
+        const allPosts = data.post_stream?.posts || [];
+        const acceptedPost = allPosts.find((p: any) => p.accepted_answer === true);
         if (acceptedPost) {
           text += `\n\n\u2705 ACCEPTED ANSWER by ${acceptedPost.username} (${formatDate(acceptedPost.created_at)})\n`;
           text += strip(acceptedPost.cooked);
+        } else if (data.post_stream?.stream?.length > allPosts.length) {
+          text += `\n\n\u2705 This thread has an accepted answer, but it is on a later page. Use get_post_replies with a higher page number to find it.`;
         }
       }
 
@@ -1024,7 +1057,7 @@ SERVER.registerTool(
       if (properties.length > 0) {
         output += `## Properties (${properties.length})\n`;
         for (const p of properties) {
-          const tags = p.Tags ? ` [${p.Tags.join(", ")}]` : "";
+          const tags = fmtTags(p.Tags);
           const type = p.ValueType?.Name ?? "unknown";
           const desc = p.Description ? ` \u2014 ${p.Description}` : "";
           output += `- **${p.Name}**: ${type}${tags}${desc}\n`;
@@ -1035,7 +1068,7 @@ SERVER.registerTool(
       if (methods.length > 0) {
         output += `## Methods (${methods.length})\n`;
         for (const m of methods) {
-          const tags = m.Tags ? ` [${m.Tags.join(", ")}]` : "";
+          const tags = fmtTags(m.Tags);
           const params = (m.Parameters ?? [])
             .map(
               (p) =>
@@ -1052,7 +1085,7 @@ SERVER.registerTool(
       if (events.length > 0) {
         output += `## Events (${events.length})\n`;
         for (const e of events) {
-          const tags = e.Tags ? ` [${e.Tags.join(", ")}]` : "";
+          const tags = fmtTags(e.Tags);
           const params = (e.Parameters ?? [])
             .map((p) => `${p.Name}: ${p.Type.Name}`)
             .join(", ");
@@ -1065,7 +1098,7 @@ SERVER.registerTool(
       if (callbacks.length > 0) {
         output += `## Callbacks (${callbacks.length})\n`;
         for (const c of callbacks) {
-          const tags = c.Tags ? ` [${c.Tags.join(", ")}]` : "";
+          const tags = fmtTags(c.Tags);
           const desc = c.Description ? ` \u2014 ${c.Description}` : "";
           output += `- **${c.Name}**${tags}${desc}\n`;
         }
