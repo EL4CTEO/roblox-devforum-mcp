@@ -376,26 +376,25 @@ function flattenDocBody(body) {
 async function getLuauDoc(libraryName) {
     try {
         const html = await fetchHTML("https://luau-lang.org/library");
-        const sectionHeader = `${libraryName} library`;
-        const sectionStart = html.indexOf(sectionHeader);
+        const anchor = `function ${libraryName}.`;
+        const sectionStart = html.indexOf(anchor);
         if (sectionStart === -1) {
             const available = ["math", "table", "string", "coroutine", "bit32", "utf8", "os", "debug", "buffer", "vector"];
-            return `Library "${libraryName}" not found.\nAvailable: ${available.join(", ")}.`;
+            return `Library "${libraryName}" not found. Available: ${available.join(", ")}.`;
         }
-        // Find next section by looking for the second occurrence of " library" after a gap
+        // Find next library section by looking for the next function from a different library
         let sectionEnd = html.length;
         const allLibs = ["math", "table", "string", "coroutine", "bit32", "utf8", "os", "debug", "buffer", "vector"];
         for (const lib of allLibs) {
             if (lib === libraryName)
                 continue;
-            const idx = html.indexOf(`${lib} library`, sectionStart + sectionHeader.length);
+            const idx = html.indexOf(`function ${lib}.`, sectionStart + anchor.length);
             if (idx > sectionStart && idx < sectionEnd)
                 sectionEnd = idx;
         }
         const section = html.substring(sectionStart, sectionEnd);
-        // Extract function signatures from the stripped text
         const text = strip(section);
-        const functions = [...text.matchAll(/function\s+([\w.]+)\(([^)]*)\)\s*(?::\s*([^\n]+))?/gi)];
+        const functions = [...text.matchAll(/function\s+([\w.]+)\(([^)]*)\)\s*(?::\s*([^\s,][^\n]*?))?\s*$/gim)];
         let out = `# Luau ${libraryName} library\n\n`;
         for (const m of functions) {
             out += `- **${m[1]}**(${m[2]})${m[3] ? ": " + m[3].trim() : ""}\n`;
