@@ -372,30 +372,22 @@ function flattenDocBody(body) {
 // ─── Luau Docs ───────────────────────────────────────────────────
 async function getLuauDoc(libraryName) {
     try {
-        const data = await fetchJSONCached("https://raw.githubusercontent.com/luau-lang/luau/master/docs/_data/library.json", { etag: true });
-        const lib = data.libraries?.find((l) => l.name?.toLowerCase() === libraryName.toLowerCase());
-        if (!lib) {
-            const available = (data.libraries || [])
-                .map((l) => l.name)
-                .filter(Boolean)
-                .join(", ");
-            return `Library "${libraryName}" not found.\nAvailable Luau libraries: ${available || "none found"}.`;
+        const html = await fetchHTML("https://luau-lang.org/library");
+        const sectionStart = html.indexOf(`${libraryName} library`);
+        if (sectionStart === -1) {
+            const available = ["math", "table", "string", "coroutine", "bit32", "utf8", "os", "debug", "buffer", "vector"];
+            return `Library "${libraryName}" not found.\nAvailable: ${available.join(", ")}.`;
         }
-        let out = `# Luau ${lib.name}\n`;
-        if (lib.description)
-            out += `${lib.description}\n\n`;
-        for (const fn of lib.functions || []) {
-            const params = (fn.parameters || [])
-                .map((p) => `${p.name}: ${p.type}`)
-                .join(", ");
-            out += `- **${fn.name}**(${params})${fn.returns ? `: ${fn.returns}` : ""}\n`;
+        const nextSection = html.indexOf(" library", sectionStart + 20);
+        const sectionEnd = nextSection > sectionStart ? nextSection : Math.min(sectionStart + 5000, html.length);
+        const section = html.substring(sectionStart, sectionEnd);
+        const functions = [...section.matchAll(/function\s+([\w.]+)\(([^)]*)\)(?::\s*([^\n]+))?/gi)];
+        let out = `# Luau ${libraryName} library\n\n`;
+        for (const m of functions) {
+            out += `- **${m[1]}**(${m[2]})${m[3] ? ": " + m[3] : ""}\n`;
         }
-        for (const prop of lib.properties || []) {
-            out += `- **${prop.name}**: ${prop.type}\n`;
-        }
-        for (const enumObj of lib.enums || []) {
-            out += `- **${enumObj.name}**${enumObj.description ? ` \u2014 ${enumObj.description}` : ""}\n`;
-        }
+        if (!functions.length)
+            out += strip(section.substring(0, 3000));
         return out;
     }
     catch (e) {
