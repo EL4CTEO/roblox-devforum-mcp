@@ -1,17 +1,6 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "3.2.1",
-  "description": "MCP server for Roblox Developer Forum, Creator Hub docs, API Dump, and platform status — 23 tools with __NEXT_DATA__ extraction, search scoring, rate limit resilience",
-  "main": "build/index.js",
-  "bin": {
-    "roblox-devforum-mcp": "./build/index.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "start": "node build/index.js",
-    "watch": "tsc --watch"
-  },
-  "keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs", "api-dump"],
+  "version": "4.0.0","description": "MCP server for Roblox Developer Forum, Creator Hub docs, API Dump, Creator Store, and platform status — 27 tools with __NEXT_DATA__ extraction, real enum values, asset search, ETag cache, search scoring","keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs", "api-dump", "creator-store", "luau"],
   "author": "EL4CTEO",
   "license": "UNLICENSED",
   "private": true,
