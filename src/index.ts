@@ -23,7 +23,7 @@ const SERVER = new McpServer({ name: "roblox-devforum-mcp", version: VERSION });
 
 const COMMON_HEADERS: Record<string, string> = {
   Accept: "application/json",
-  "User-Agent": `roblox-devforum-mcp/${VERSION}`,
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 };
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -467,11 +467,32 @@ async function siteSearch(ddg: string, query: string): Promise<SearchResult[]> {
 
 // ─── Creator Store search ──────────────────────────────────────
 
+const VALID_LIMITS = [10, 28, 30, 50, 60, 100, 120];
+function normalizeLimit(n: number): number {
+  return VALID_LIMITS.find((v) => v >= n) || 10;
+}
+
 async function searchCreatorStore({ query, assetType, limit }: { query: string; assetType?: string; limit: number }): Promise<any[]> {
-  let url = `${CREATOR_STORE}/v1/search/items?Category=Models&Keyword=${encodeURIComponent(query)}&Limit=${limit}`;
-  if (assetType) url += `&Category=${assetType}`;
-  const data = await fetchJSON(url);
-  return data.data || [];
+  const category = assetType || "Models";
+  const searchLimit = normalizeLimit(Math.min(limit, 30));
+  const searchUrl = `${CREATOR_STORE}/v1/search/items?Category=${category}&SortType=Relevance&Limit=${searchLimit}&Keyword=${encodeURIComponent(query)}`;
+  const searchData = await fetchJSON(searchUrl);
+  const items = (searchData.data || []) as any[];
+  const assets = items.filter((i: any) => i.itemType === "Asset");
+
+  // Fetch economy details per asset (single-endpoint; no public batch exists)
+  const results: any[] = [];
+  const maxDetails = Math.min(limit, assets.length);
+  for (let i = 0; i < maxDetails; i++) {
+    try {
+      const id = assets[i].id;
+      const details = await fetchJSON(`https://economy.roblox.com/v2/assets/${id}/details`);
+      results.push(details);
+    } catch (_) {
+      // skip failed detail fetch
+    }
+  }
+  return results;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1075,7 +1096,7 @@ SERVER.registerTool(
       member_type: z
         .enum(["Property", "Function", "Event", "Callback"])
         .optional()
-        .describe("Filter by member type"),
+        .describe('Filter by member type: Property, Function, Event, or Callback (case-sensitive)'),
       limit: z.number().min(1).max(50).default(10).describe("Max results"),
     }),
   },
@@ -1498,11 +1519,11 @@ SERVER.registerTool(
       if (!items.length) return ok(`No results found for "${query}" in the Creator Store.`);
 
       const lines = items.map((item: any) => {
-        const name = item.name || item.Name || "Untitled";
-        const creator = item.creator?.name || item.creator?.Name || "unknown";
-        const id = item.id || item.Id || item.AssetId;
-        const price = item.price !== undefined ? (item.price === 0 ? "Free" : `R$${item.price}`) : "N/A";
-        return `\u2022 ${name}\n  ID: ${id} | Creator: ${creator} | Price: ${price}\n  https://www.roblox.com/library/${id}`;
+        const name = item.Name || "Untitled";
+        const creator = item.Creator?.Name || "unknown";
+        const id = item.AssetId;
+        const price = item.PriceInRobux !== undefined ? (item.PriceInRobux === null ? "N/A" : item.PriceInRobux === 0 ? "Free" : `R$${item.PriceInRobux}`) : "N/A";
+        return "\u2022 " + name + "\n  ID: " + id + " | Creator: " + creator + " | Price: " + price + "\n  https://www.roblox.com/library/" + id;
       });
 
       return ok(`Creator Store results for "${query}":\n\n${lines.join("\n\n")}`);

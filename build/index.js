@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 "use strict";
-// ─── Imports ─────────────────────────────────────────────────────
+// =================================================================
+// roblox-devforum-mcp v4.0.0
+// State-of-the-art MCP server for Roblox Studio workflow
+// 27 tools: DevForum, API Dump, Creator Hub, Luau, Status, Creator Store
+// =================================================================
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -38,41 +42,74 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const mcp_js_1 = require("@modelcontextprotocol/sdk/server/mcp.js");
 const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod"));
-// ─── Constants ────────────────────────────────────────────────────
-const VERSION = "3.2.1";
+// ─── Config ─────────────────────────────────────────────────────
+const VERSION = "4.0.0";
 const DEVFORUM = "https://devforum.roblox.com";
 const CREATOR_DOCS = "https://create.roblox.com";
 const ROBLOX_STATUS = "https://status.roblox.com";
+const CREATOR_STORE = "https://catalog.roblox.com";
+const SEARCH_ENGINE = "https://duckduckgo.com/html";
 const SERVER = new mcp_js_1.McpServer({ name: "roblox-devforum-mcp", version: VERSION });
 const COMMON_HEADERS = {
     Accept: "application/json",
-    "User-Agent": `roblox-devforum-mcp/${VERSION}`,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 };
-const FETCH_TIMEOUT_MS = 15000; // 15s per request
-const MAX_RETRIES = 3; // Readme advertised
-const BASE_BACKOFF_MS = 1000; // 1s base backoff
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 min TTL
-const CACHE_MAX = 200; // 200-entry LRU
-// ─── HTTP Helpers ────────────────────────────────────────────────
+const FETCH_TIMEOUT_MS = 15000;
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX = 200;
+const CACHE = new Map();
+const CACHE_KEYS = [];
+function cacheGet(key) {
+    const entry = CACHE.get(key);
+    if (!entry)
+        return undefined;
+    if (Date.now() - entry.ts > CACHE_TTL_MS) {
+        CACHE.delete(key);
+        const idx = CACHE_KEYS.indexOf(key);
+        if (idx >= 0)
+            CACHE_KEYS.splice(idx, 1);
+        return undefined;
+    }
+    return entry;
+}
+function cacheSet(key, value, etag) {
+    if (CACHE.has(key)) {
+        const idx = CACHE_KEYS.indexOf(key);
+        if (idx >= 0)
+            CACHE_KEYS.splice(idx, 1);
+    }
+    else if (CACHE_KEYS.length >= CACHE_MAX) {
+        const oldest = CACHE_KEYS.shift();
+        CACHE.delete(oldest);
+    }
+    CACHE.set(key, { value, ts: Date.now(), etag });
+    CACHE_KEYS.push(key);
+}
 async function httpFetch(url, opts = {}) {
-    const { json = false, retries = MAX_RETRIES } = opts;
+    const { json = false, etag, retries = MAX_RETRIES } = opts;
+    const headers = json
+        ? { ...COMMON_HEADERS }
+        : { "User-Agent": COMMON_HEADERS["User-Agent"] };
+    if (etag)
+        headers["If-None-Match"] = etag;
     for (let attempt = 0; attempt < retries + 1; attempt++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
         try {
-            const res = await fetch(url, {
-                headers: json ? COMMON_HEADERS : { "User-Agent": COMMON_HEADERS["User-Agent"] },
-                signal: controller.signal,
-            });
+            const res = await fetch(url, { headers, signal: controller.signal });
             if (res.status === 429) {
                 const jitter = Math.random() * BASE_BACKOFF_MS;
                 const delay = BASE_BACKOFF_MS * Math.pow(2, attempt) + jitter;
                 await new Promise((r) => setTimeout(r, delay));
-                continue; // retry
+                continue;
             }
             if (!res.ok) {
                 if (res.status === 404)
                     throw new Error(`Not found: ${url}`);
+                if (res.status === 304)
+                    return res; // conditional cache hit
                 throw new Error(`HTTP ${res.status}: ${res.statusText}`);
             }
             return res;
@@ -94,6 +131,32 @@ async function httpFetch(url, opts = {}) {
         }
     }
     throw new Error("Too many retries");
+}
+async function fetchJSONCached(url, opts) {
+    const key = `json::${url}`;
+    const cached = cacheGet(key);
+    try {
+        const res = await httpFetch(url, { json: true, etag: opts?.etag ? cached?.etag : undefined });
+        if (res.status === 304 && cached) {
+            // Update timestamp to extend TTL
+            cacheSet(key, cached.value, cached.etag);
+            return JSON.parse(cached.value);
+        }
+        const text = await res.text();
+        const newEtag = res.headers.get("ETag") || undefined;
+        cacheSet(key, text, newEtag);
+        return JSON.parse(text);
+    }
+    catch (e) {
+        // If conditional request fails, fallback to no-etag
+        if (opts?.etag && e.message?.includes("Too many retries")) {
+            const res2 = await httpFetch(url, { json: true });
+            const text = await res2.text();
+            cacheSet(key, text, res2.headers.get("ETag") || undefined);
+            return JSON.parse(text);
+        }
+        throw e;
+    }
 }
 async function fetchJSON(url) {
     const res = await httpFetch(url, { json: true });
@@ -119,36 +182,7 @@ async function fetchHTML(url) {
     const res = await httpFetch(url, { json: false });
     return res.text();
 }
-const CACHE = new Map();
-const CACHE_KEYS = [];
-function cacheGet(key) {
-    const entry = CACHE.get(key);
-    if (!entry)
-        return undefined;
-    if (Date.now() - entry.ts > CACHE_TTL_MS) {
-        CACHE.delete(key);
-        const idx = CACHE_KEYS.indexOf(key);
-        if (idx >= 0)
-            CACHE_KEYS.splice(idx, 1);
-        return undefined;
-    }
-    return entry.value;
-}
-function cacheSet(key, value) {
-    if (CACHE.has(key)) {
-        CACHE.delete(key); // move to end
-        const idx = CACHE_KEYS.indexOf(key);
-        if (idx >= 0)
-            CACHE_KEYS.splice(idx, 1);
-    }
-    else if (CACHE_KEYS.length >= CACHE_MAX) {
-        const oldest = CACHE_KEYS.shift();
-        CACHE.delete(oldest);
-    }
-    CACHE.set(key, { value, ts: Date.now() });
-    CACHE_KEYS.push(key);
-}
-// ─── HTML Strip ─────────────────────────────────────────────────
+// ─── HTML/JSON helpers ──────────────────────────────────────────
 function strip(html) {
     return html
         .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -163,10 +197,49 @@ function strip(html) {
         .replace(/\s+/g, " ")
         .trim();
 }
-// ─── Date / Format Helpers ─────────────────────────────────────
+function truncate(text, maxLen) {
+    if (text.length <= maxLen)
+        return text;
+    return text.slice(0, maxLen - 3) + "...";
+}
 function formatDate(d) {
     return new Date(d).toISOString().split("T")[0];
 }
+function ok(text) {
+    return { content: [{ type: "text", text }] };
+}
+function err(e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+}
+// ─── Search scoring ─────────────────────────────────────────────
+function scoreTopic(t) {
+    let score = 0;
+    if (t.has_accepted_answer)
+        score += 50;
+    if (t.solved)
+        score += 50;
+    // Category weight
+    if (t.category_id) {
+        if (t.category_id === 6)
+            score += 30; // scripting-support
+        if (t.category_id === 36)
+            score += 20; // updates
+        if (t.category_id === 35)
+            score += 15; // help-and-feedback
+    }
+    score += (t.views ?? 0) * 0.001;
+    score += (t.like_count ?? 0) * 0.5;
+    const daysOld = t.created_at
+        ? (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24)
+        : 0;
+    score += Math.max(0, 30 - daysOld);
+    return score;
+}
+function sortByRelevance(topics) {
+    return [...topics].sort((a, b) => scoreTopic(b) - scoreTopic(a));
+}
+// ─── DevForum helpers ───────────────────────────────────────────
 function topicLine(t, users) {
     const date = t.created_at ? formatDate(t.created_at) : "unknown";
     const title = t.title || t.fancy_title || "Untitled";
@@ -174,15 +247,13 @@ function topicLine(t, users) {
     const views = t.views ?? 0;
     const replies = t.posts_count ? t.posts_count - 1 : t.reply_count ?? 0;
     let author = t.last_poster_username || "";
-    // Discourse search returns user_id in posters
     if (!author && users && t.posters?.length) {
         const poster = t.posters[0];
         if (poster.user_id)
             author = users.get(poster.user_id) || "";
     }
-    if (!author && users && t.id) {
+    if (!author && users && t.id)
         author = users.get(t.id) || "";
-    }
     return `\u2022 ${title}\n  Author: ${author || "unknown"} | Date: ${date} | Replies: ${replies} | Views: ${views}\n  ${url}`;
 }
 function formatTopics(topics, users, limit) {
@@ -215,45 +286,8 @@ function searchUserMap(data) {
     }
     return map;
 }
-function ok(text) {
-    return { content: [{ type: "text", text }] };
-}
-function err(e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-}
-// ─── Search Scoring (README advertised) ──────────────────────────
-function scoreTopic(t) {
-    let score = 0;
-    // Solved boost
-    if (t.has_accepted_answer)
-        score += 50;
-    if (t.solved)
-        score += 50;
-    // Category weight: bug reports > scripting support > general
-    if (t.category_id) {
-        if (t.category_id === 6)
-            score += 30; // scripting-support
-        if (t.category_id === 36)
-            score += 20; // updates
-        if (t.category_id === 35)
-            score += 15; // help-and-feedback
-    }
-    // Engagement
-    score += (t.views ?? 0) * 0.001;
-    score += (t.like_count ?? 0) * 0.5;
-    // Recency
-    const daysOld = t.created_at
-        ? (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24)
-        : 0;
-    score += Math.max(0, 30 - daysOld); // up to +30 for fresh topics
-    return score;
-}
-function sortByRelevance(topics) {
-    return [...topics].sort((a, b) => scoreTopic(b) - scoreTopic(a));
-}
 async function getRobloxStatusData() {
-    const data = await fetchJSON("https://kctbh9vrtdwd.statuspage.io//api/v2/components.json");
+    const data = await fetchJSONCached("https://kctbh9vrtdwd.statuspage.io/api/v2/components.json", { etag: true });
     return data;
 }
 let apiDumpCache = null;
@@ -261,17 +295,17 @@ let apiDumpTs = 0;
 async function getApiDump() {
     if (apiDumpCache && Date.now() - apiDumpTs < CACHE_TTL_MS)
         return apiDumpCache;
-    const data = await fetchJSON("https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json");
-    apiDumpCache = data.Classes;
+    const data = await fetchJSONCached("https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json", { etag: true });
+    apiDumpCache = data;
     apiDumpTs = Date.now();
     return apiDumpCache;
 }
-// ─── Creator Hub __NEXT_DATA__ ─────────────────────────────────
+// ─── Creator Hub docs ───────────────────────────────────────────
 async function fetchCreatorDocsHTML(docPath) {
     const url = `${CREATOR_DOCS}/${docPath}`;
     const cached = cacheGet(url);
     if (cached)
-        return cached;
+        return cached.value;
     const html = await fetchHTML(url);
     cacheSet(url, html);
     return html;
@@ -298,7 +332,9 @@ function flattenDocBody(body) {
         if (block.text)
             return block.text;
         if (block.children)
-            return block.children.map((c) => (typeof c === "string" ? c : c.text || "")).join("");
+            return block.children
+                .map((c) => (typeof c === "string" ? c : c.text || ""))
+                .join("");
         if (block.code)
             return `\`\`\`\n${block.code}\n\`\`\``;
         return "";
@@ -309,7 +345,7 @@ function flattenDocBody(body) {
 // ─── Luau Docs ───────────────────────────────────────────────────
 async function getLuauDoc(libraryName) {
     try {
-        const data = await fetchJSON("https://raw.githubusercontent.com/luau-lang/luau/master/docs/_data/library.json");
+        const data = await fetchJSONCached("https://raw.githubusercontent.com/luau-lang/luau/master/docs/_data/library.json", { etag: true });
         const lib = data.libraries?.find((l) => l.name?.toLowerCase() === libraryName.toLowerCase());
         if (!lib) {
             const available = (data.libraries || [])
@@ -322,7 +358,9 @@ async function getLuauDoc(libraryName) {
         if (lib.description)
             out += `${lib.description}\n\n`;
         for (const fn of lib.functions || []) {
-            const params = (fn.parameters || []).map((p) => `${p.name}: ${p.type}`).join(", ");
+            const params = (fn.parameters || [])
+                .map((p) => `${p.name}: ${p.type}`)
+                .join(", ");
             out += `- **${fn.name}**(${params})${fn.returns ? `: ${fn.returns}` : ""}\n`;
         }
         for (const prop of lib.properties || []) {
@@ -337,7 +375,60 @@ async function getLuauDoc(libraryName) {
         return `Error fetching Luau docs: ${e instanceof Error ? e.message : String(e)}`;
     }
 }
-// ─── Tools: DevForum ───────────────────────────────────────────
+async function siteSearch(ddg, query) {
+    const q = encodeURIComponent(query);
+    const url = `${ddg}/?q=${q}+site%3Acreate.roblox.com%2Fdocs`;
+    try {
+        const html = await fetchHTML(url);
+        const results = [];
+        const anchors = [...html.matchAll(/<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs)];
+        for (const m of anchors) {
+            const rawUrl = m[1];
+            const title = strip(m[2]);
+            if (!title || !rawUrl)
+                continue;
+            let realUrl = rawUrl;
+            if (rawUrl.startsWith("//"))
+                realUrl = "https:" + rawUrl;
+            results.push({ title, url: realUrl });
+        }
+        return results.slice(0, 10);
+    }
+    catch {
+        return [];
+    }
+}
+// ─── Creator Store search ──────────────────────────────────────
+const VALID_LIMITS = [10, 28, 30, 50, 60, 100, 120];
+function normalizeLimit(n) {
+    return VALID_LIMITS.find((v) => v >= n) || 10;
+}
+async function searchCreatorStore({ query, assetType, limit }) {
+    const category = assetType || "Models";
+    const searchLimit = normalizeLimit(Math.min(limit, 30));
+    const searchUrl = `${CREATOR_STORE}/v1/search/items?Category=${category}&SortType=Relevance&Limit=${searchLimit}&Keyword=${encodeURIComponent(query)}`;
+    const searchData = await fetchJSON(searchUrl);
+    const items = (searchData.data || []);
+    const assets = items.filter((i) => i.itemType === "Asset");
+    // Fetch economy details per asset (single-endpoint; no public batch exists)
+    const results = [];
+    const maxDetails = Math.min(limit, assets.length);
+    for (let i = 0; i < maxDetails; i++) {
+        try {
+            const id = assets[i].id;
+            const details = await fetchJSON(`https://economy.roblox.com/v2/assets/${id}/details`);
+            results.push(details);
+        }
+        catch (_) {
+            // skip failed detail fetch
+        }
+    }
+    return results;
+}
+// ════════════════════════════════════════════════════════════════
+// TOOLS
+// ════════════════════════════════════════════════════════════════
+// ─── DevForum ───────────────────────────────────────────────────
 SERVER.registerTool("get_announcements", {
     title: "Get Announcements",
     description: "Get latest Roblox Developer Forum announcements",
@@ -367,7 +458,6 @@ SERVER.registerTool("get_latest_posts", {
         if (category_id)
             url += `?category=${category_id}`;
         const data = await fetchJSON(url);
-        const sc = scoreTopic;
         const topics = sortByRelevance(data.topic_list.topics || []).slice(0, limit);
         const text = formatTopics(topics, data.users, limit);
         return ok(`Latest DevForum Posts:\n\n${text}`);
@@ -407,11 +497,13 @@ SERVER.registerTool("search_devforum", {
 });
 SERVER.registerTool("get_thread", {
     title: "Get Thread",
-    description: "Get a specific DevForum thread. Returns the first post (title + content) and reply count. Use get_post_replies to read replies.",
+    description: "Get a specific DevForum thread. Returns the first post (title + content) and reply count. Use get_post_replies to read replies." +
+        " Optionally includes the accepted answer if present.",
     inputSchema: z.object({
         thread_id: z.string().describe("Thread ID or slug"),
+        include_op: z.boolean().optional().default(false).describe("Include original post in accepted answer"),
     }),
-}, async ({ thread_id }) => {
+}, async ({ thread_id, include_op }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json`);
         const firstPost = data.post_stream?.posts?.[0];
@@ -424,6 +516,20 @@ SERVER.registerTool("get_thread", {
         if (firstPost) {
             text += `--- First Post by ${firstPost.username} (${formatDate(firstPost.created_at)}) ---\n`;
             text += strip(firstPost.cooked);
+        }
+        // Accepted answer
+        if (data.has_accepted_answer && data.post_stream?.stream) {
+            const acceptedId = data.post_stream.accepted_answer_post_id;
+            if (!acceptedId && include_op) {
+                // accepted_answer may not expose post_id in some versions
+            }
+            // Search for accepted post
+            const allPosts = data.post_stream.posts || [];
+            const acceptedPost = allPosts.find((p) => p.is_accepted_answer || p.post_number === acceptedId);
+            if (acceptedPost) {
+                text += `\n\n\u2705 ACCEPTED ANSWER by ${acceptedPost.username} (${formatDate(acceptedPost.created_at)})\n`;
+                text += strip(acceptedPost.cooked);
+            }
         }
         return ok(text.trim());
     }
@@ -446,7 +552,10 @@ SERVER.registerTool("get_action_required", {
             return ok(`No topics found for "${tag}".`);
         topics = sortByRelevance(topics);
         const userMap = searchUserMap(data);
-        const lines = topics.slice(0, 20).map((t) => topicLine(t, userMap)).join("\n\n");
+        const lines = topics
+            .slice(0, 20)
+            .map((t) => topicLine(t, userMap))
+            .join("\n\n");
         return ok(`Topics requiring action:\n\n${lines}`);
     }
     catch (e) {
@@ -503,12 +612,18 @@ SERVER.registerTool("get_top_posts", {
 });
 SERVER.registerTool("get_post_replies", {
     title: "Get Post Replies",
-    description: "Get replies for a DevForum thread at a specific page. Fetches one page only \u2014 never auto-paginates.",
+    description: "Get replies for a DevForum thread at a specific page. Fetches one page only.",
     inputSchema: z.object({
         thread_id: z.string().describe("Thread ID"),
         page: z.number().min(1).default(1).describe("Page number (1-indexed)"),
+        max_length: z
+            .number()
+            .min(100)
+            .max(8000)
+            .optional()
+            .describe("Max characters per post (truncated if longer)"),
     }),
-}, async ({ thread_id, page }) => {
+}, async ({ thread_id, page, max_length }) => {
     try {
         const data = await fetchJSON(`${DEVFORUM}/t/${thread_id}.json?page=${page}`);
         const posts = data.post_stream?.posts || [];
@@ -516,8 +631,12 @@ SERVER.registerTool("get_post_replies", {
             return ok(`No posts found on page ${page}.`);
         let text = `Thread: ${data.title} \u2014 Page ${page}\n\n`;
         for (const p of posts) {
+            let body = strip(p.cooked);
+            if (max_length && body.length > max_length) {
+                body = body.slice(0, max_length - 3) + "...";
+            }
             text += `--- ${p.username} (${formatDate(p.created_at)}) ---\n`;
-            text += strip(p.cooked) + "\n\n";
+            text += body + "\n\n";
         }
         return ok(text.trim());
     }
@@ -589,16 +708,100 @@ SERVER.registerTool("get_user_posts", {
         return err(e);
     }
 });
+// ─── Creator Hub ────────────────────────────────────────────────
+SERVER.registerTool("get_creator_docs", {
+    title: "Get Creator Docs",
+    description: "Fetch Creator Hub docs with __NEXT_DATA__ structured extraction. Use docs path like 'docs/reference/engine/classes/BasePart' or 'docs/production/publishing/publishing-experience'.",
+    inputSchema: z.object({
+        path: z.string().describe("Doc path (e.g. docs/reference/engine/classes/BasePart)"),
+    }),
+}, async ({ path }) => {
+    try {
+        const html = await fetchCreatorDocsHTML(path);
+        const nextData = extractNextData(html);
+        if (!nextData) {
+            const cleaned = strip(html).slice(0, 4000);
+            return ok(`Creator docs page found but no structured data available:\n\n${cleaned}`);
+        }
+        const pageProps = nextData.props?.pageProps;
+        const doc = pageProps?.doc || pageProps?.data;
+        if (!doc) {
+            const cleaned = strip(html).slice(0, 4000);
+            return ok(`Creator docs page found but no structured doc data:\n\n${cleaned}`);
+        }
+        const title = doc.title || doc.name || "Untitled";
+        let out = `# ${title}\n`;
+        if (doc.description)
+            out += `${doc.description}\n\n`;
+        if (doc.body) {
+            out += flattenDocBody(doc.body);
+        }
+        else if (doc.content) {
+            out +=
+                typeof doc.content === "string"
+                    ? strip(doc.content)
+                    : flattenDocBody(doc.content);
+        }
+        return ok(out.trim());
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+SERVER.registerTool("search_creator_docs", {
+    title: "Search Creator Docs",
+    description: "Search official Roblox Creator Hub documentation (create.roblox.com/docs). Returns direct doc links. For community tutorials, use search_community_resources.",
+    inputSchema: z.object({
+        query: z.string().describe("Search query"),
+        limit: z.number().min(1).max(20).default(10).describe("Max results"),
+    }),
+}, async ({ query, limit }) => {
+    try {
+        // Primary: DevForum resources category
+        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
+        let topics = devforumData.topics || [];
+        // Fallback: DuckDuckGo site: search
+        let ddgResults = [];
+        if (!topics.length) {
+            ddgResults = await siteSearch(SEARCH_ENGINE, query);
+        }
+        const userMap = searchUserMap(devforumData);
+        let lines = topics
+            .slice(0, limit)
+            .map((t) => topicLine(t, userMap));
+        for (const r of ddgResults.slice(0, limit)) {
+            lines.push(`\u2022 ${r.title}\n  ${r.url}`);
+        }
+        if (!lines.length)
+            return ok(`No results found for "${query}" in Creator Docs.`);
+        return ok(`Creator Docs search for "${query}":\n\n${lines.join("\n\n")}`);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+SERVER.registerTool("get_luau_docs", {
+    title: "Get Luau Docs",
+    description: "Get Luau standard library reference for built-in modules: math, string, table, task, coroutine, os, utf8, bit32, debug.",
+    inputSchema: z.object({
+        library: z.string().describe('Library name (e.g. "math", "string", "table", "task")'),
+    }),
+}, async ({ library }) => {
+    const out = await getLuauDoc(library);
+    return ok(out);
+});
+// ─── API Reference ──────────────────────────────────────────────
 SERVER.registerTool("get_api_docs", {
     title: "Get API Docs",
-    description: "Get Roblox Creator documentation for an engine class (properties, methods, events)",
+    description: "Get Roblox Creator documentation for an engine class (properties, methods, events, callbacks, inheritance).",
     inputSchema: z.object({
         class_name: z.string().describe('Engine class name (e.g. "BasePart", "Workspace")'),
-        include_inherited: z.boolean().optional().default(false).describe("Include key inherited members from parent classes"),
+        include_inherited: z.boolean().optional().default(false).describe("Include inherited members from parent classes"),
     }),
 }, async ({ class_name, include_inherited }) => {
     try {
-        const classes = await getApiDump();
+        const dump = await getApiDump();
+        const classes = dump.Classes;
         const cls = classes.find((c) => c.Name.toLowerCase() === class_name.toLowerCase());
         if (!cls) {
             const partials = classes
@@ -623,15 +826,18 @@ SERVER.registerTool("get_api_docs", {
         output += `Inherits: ${chain.join(" > ")}\n`;
         if (cls.Tags && cls.Tags.length > 0)
             output += `Tags: ${cls.Tags.join(", ")}\n`;
+        if (cls.Description)
+            output += `Description: ${cls.Description}\n`;
         output += `Docs: ${CREATOR_DOCS}/docs/reference/engine/classes/${cls.Name}\n\n`;
-        // Collect members (own + optionally inherited)
-        const allMembers = include_inherited ? [] : [...(cls.Members ?? [])];
+        // Collect members
+        const allMembers = include_inherited
+            ? []
+            : [...(cls.Members ?? [])];
         if (include_inherited) {
             let walk = cls;
             while (walk) {
                 if (walk.Members) {
                     for (const m of walk.Members) {
-                        // Avoid duplicating overridden members
                         if (!allMembers.some((existing) => existing.Name === m.Name)) {
                             allMembers.push(m);
                         }
@@ -652,7 +858,8 @@ SERVER.registerTool("get_api_docs", {
             for (const p of properties) {
                 const tags = p.Tags ? ` [${p.Tags.join(", ")}]` : "";
                 const type = p.ValueType?.Name ?? "unknown";
-                output += `- **${p.Name}**: ${type}${tags}\n`;
+                const desc = p.Description ? ` \u2014 ${p.Description}` : "";
+                output += `- **${p.Name}**: ${type}${tags}${desc}\n`;
             }
             output += "\n";
         }
@@ -664,7 +871,8 @@ SERVER.registerTool("get_api_docs", {
                     .map((p) => `${p.Name}: ${p.Type.Name}${p.Default !== undefined ? ` = ${p.Default}` : ""}`)
                     .join(", ");
                 const ret = m.ReturnType?.Name ?? "void";
-                output += `- **${m.Name}**(${params}): ${ret}${tags}\n`;
+                const desc = m.Description ? ` \u2014 ${m.Description}` : "";
+                output += `- **${m.Name}**(${params}): ${ret}${tags}${desc}\n`;
             }
             output += "\n";
         }
@@ -672,8 +880,11 @@ SERVER.registerTool("get_api_docs", {
             output += `## Events (${events.length})\n`;
             for (const e of events) {
                 const tags = e.Tags ? ` [${e.Tags.join(", ")}]` : "";
-                const params = (e.Parameters ?? []).map((p) => `${p.Name}: ${p.Type.Name}`).join(", ");
-                output += `- **${e.Name}**(${params})${tags}\n`;
+                const params = (e.Parameters ?? [])
+                    .map((p) => `${p.Name}: ${p.Type.Name}`)
+                    .join(", ");
+                const desc = e.Description ? ` \u2014 ${e.Description}` : "";
+                output += `- **${e.Name}**(${params})${tags}${desc}\n`;
             }
             output += "\n";
         }
@@ -681,7 +892,8 @@ SERVER.registerTool("get_api_docs", {
             output += `## Callbacks (${callbacks.length})\n`;
             for (const c of callbacks) {
                 const tags = c.Tags ? ` [${c.Tags.join(", ")}]` : "";
-                output += `- **${c.Name}**${tags}\n`;
+                const desc = c.Description ? ` \u2014 ${c.Description}` : "";
+                output += `- **${c.Name}**${tags}${desc}\n`;
             }
             output += "\n";
         }
@@ -697,76 +909,124 @@ SERVER.registerTool("get_api_docs", {
         return err(e);
     }
 });
-SERVER.registerTool("search_creator_docs", {
-    title: "Search Creator Docs",
-    description: "Search community tutorials and resources from the DevForum Resources category. For official Roblox API docs, use get_api_docs instead.",
+SERVER.registerTool("search_api_member", {
+    title: "Search API Member",
+    description: "Search for a property, method, event, or callback by name across ALL Roblox API classes.",
     inputSchema: z.object({
-        query: z.string().describe("Search query"),
-        limit: z.number().min(1).max(20).default(10).describe("Max results"),
+        query: z.string().describe("Member name to search for (e.g. Touched, Position, Destroy)"),
+        member_type: z
+            .enum(["Property", "Function", "Event", "Callback"])
+            .optional()
+            .describe('Filter by member type: Property, Function, Event, or Callback (case-sensitive)'),
+        limit: z.number().min(1).max(50).default(10).describe("Max results"),
     }),
-}, async ({ query, limit }) => {
+}, async ({ query, member_type, limit }) => {
     try {
-        const devforumData = await fetchJSON(`${DEVFORUM}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
-        let topics = devforumData.topics || [];
-        if (topics.length) {
-            topics = sortByRelevance(topics);
-            const userMap = searchUserMap(devforumData);
-            const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join("\n\n");
-            return ok(`Creator Docs search for "${query}":\n\n${lines}`);
+        const dump = await getApiDump();
+        const classes = dump.Classes;
+        const results = [];
+        const q = query.toLowerCase();
+        for (const cls of classes) {
+            for (const m of cls.Members ?? []) {
+                if (!m.Name.toLowerCase().includes(q))
+                    continue;
+                if (member_type && m.MemberType !== member_type)
+                    continue;
+                results.push({ className: cls.Name, member: m });
+            }
         }
-        return ok(`No results found for "${query}" in Creator Docs.`);
+        if (!results.length) {
+            return ok(`No API member found matching "${query}"${member_type ? ` of type ${member_type}` : ""}.`);
+        }
+        const lines = results
+            .slice(0, limit)
+            .map((r) => `\u2022 ${r.member.Name} (${r.member.MemberType}) in ${r.className}`)
+            .join("\n");
+        return ok(`Results for "${query}"${member_type ? ` [type: ${member_type}]` : ""}:\n\n${lines}`);
     }
     catch (e) {
         return err(e);
     }
 });
-SERVER.registerTool("get_creator_docs", {
-    title: "Get Creator Docs",
-    description: "Fetch Creator Hub docs with __NEXT_DATA__ structured extraction. Use docs path like 'docs/reference/engine/classes/BasePart' or 'docs/production/publishing/publishing-experience'.",
+SERVER.registerTool("get_class_hierarchy", {
+    title: "Get Class Hierarchy",
+    description: "Get the full inheritance tree for a Roblox class, showing all parent classes and direct subclasses.",
     inputSchema: z.object({
-        path: z.string().describe("Doc path (e.g. docs/reference/engine/classes/BasePart)"),
+        class_name: z.string().describe('Engine class name (e.g. "BasePart", "RemoteEvent")'),
     }),
-}, async ({ path }) => {
+}, async ({ class_name }) => {
     try {
-        const html = await fetchCreatorDocsHTML(path);
-        const nextData = extractNextData(html);
-        if (!nextData) {
-            // Fallback: return stripped HTML
-            const cleaned = strip(html).slice(0, 4000);
-            return ok(`Creator docs page found but no structured data available:\n\n${cleaned}`);
+        const dump = await getApiDump();
+        const classes = dump.Classes;
+        const cls = classes.find((c) => c.Name.toLowerCase() === class_name.toLowerCase());
+        if (!cls)
+            return ok(`Class "${class_name}" not found.`);
+        // Parents
+        const chain = [cls.Name];
+        let curr = cls;
+        while (curr?.Superclass && curr.Superclass !== "<<<ROOT>>>") {
+            chain.push(curr.Superclass);
+            curr = classes.find((c) => c.Name === curr.Superclass);
         }
-        const pageProps = nextData.props?.pageProps;
-        const doc = pageProps?.doc || pageProps?.data;
-        if (!doc) {
-            const cleaned = strip(html).slice(0, 4000);
-            return ok(`Creator docs page found but no structured doc data:\n\n${cleaned}`);
-        }
-        const title = doc.title || doc.name || "Untitled";
-        let out = `# ${title}\n`;
-        if (doc.description)
-            out += `${doc.description}\n\n`;
-        if (doc.body) {
-            out += flattenDocBody(doc.body);
-        }
-        else if (doc.content) {
-            out += typeof doc.content === "string" ? strip(doc.content) : flattenDocBody(doc.content);
-        }
-        return ok(out.trim());
+        // Subclasses
+        const children = classes
+            .filter((c) => c.Superclass?.toLowerCase() === cls.Name.toLowerCase())
+            .map((c) => c.Name)
+            .sort();
+        let out = `# ${cls.Name} Hierarchy\n\n`;
+        out += `Chain: ${chain.join(" > ")}\n`;
+        out += `Direct subclasses: ${children.length ? children.join(", ") : "none"}\n`;
+        const totalDescendants = classes.filter((c) => c.Superclass &&
+            chain.some((a) => a.toLowerCase() === c.Superclass.toLowerCase())).length;
+        out += `Total inheriting classes: ${totalDescendants}\n`;
+        return ok(out);
     }
     catch (e) {
         return err(e);
     }
 });
-SERVER.registerTool("get_luau_docs", {
-    title: "Get Luau Docs",
-    description: "Get Luau standard library reference for built-in modules: math, string, table, task, coroutine, os, utf8, bit32, debug.",
+SERVER.registerTool("get_enum", {
+    title: "Get Enum",
+    description: "List or inspect Roblox API enums. If name is provided, returns all values for that enum with descriptions. If omitted, returns list of all enums.",
     inputSchema: z.object({
-        library: z.string().describe('Library name (e.g. "math", "string", "table", "task")'),
+        name: z.string().optional().describe('Enum name (e.g. "Material", "PartType")'),
+        filter: z.string().optional().describe("Filter enum names when listing"),
     }),
-}, async ({ library }) => {
-    const out = await getLuauDoc(library);
-    return ok(out);
+}, async ({ name, filter }) => {
+    try {
+        const dump = await getApiDump();
+        const allEnums = dump.Enums || [];
+        if (name) {
+            const match = allEnums.find((e) => e.Name.toLowerCase() === name.toLowerCase());
+            if (!match) {
+                // Suggest similar
+                const similar = allEnums
+                    .filter((e) => e.Name.toLowerCase().includes(name.toLowerCase()))
+                    .slice(0, 5)
+                    .map((e) => e.Name);
+                const hint = similar.length ? ` Did you mean: ${similar.join(", ")}?` : "";
+                return ok(`Enum "${name}" not found.${hint}`);
+            }
+            const items = match.Items || [];
+            let out = `# Enum ${match.Name}\n`;
+            out += `Items: ${items.length}\n\n`;
+            for (const item of items) {
+                out += `- **${item.Name}** = ${item.Value}\n`;
+            }
+            return ok(out);
+        }
+        let list = allEnums.map((e) => e.Name).sort();
+        if (filter) {
+            const f = filter.toLowerCase();
+            list = list.filter((e) => e.toLowerCase().includes(f));
+        }
+        return ok(`Roblox API Enums (${list.length} total):\n\n${list.slice(0, 100).join(", ")}`);
+    }
+    catch (e) {
+        return err(e);
+    }
 });
+// ─── DevForum search helpers ────────────────────────────────────
 SERVER.registerTool("get_categories", {
     title: "Get Categories",
     description: "List all DevForum categories with ID, slug, name, description, and topic count",
@@ -812,7 +1072,9 @@ SERVER.registerTool("get_tags", {
         const sorted = tags
             .sort((a, b) => (b.count || 0) - (a.count || 0))
             .slice(0, 100);
-        const lines = sorted.map((t) => `\u2022 ${t.name} (${t.count} topics)`).join("\n");
+        const lines = sorted
+            .map((t) => `\u2022 ${t.name} (${t.count} topics)`)
+            .join("\n");
         return ok(`DevForum Tags (top 100 by topic count):\n\n${lines}`);
     }
     catch (e) {
@@ -832,7 +1094,6 @@ SERVER.registerTool("get_category_metadata", {
         let topicCount = raw.topic_count;
         let postCount = raw.post_count;
         let subs = data.subcategory_list?.categories || [];
-        // Fallback: /site.json for parent categories
         if (!topicCount || (!subs.length && raw.subcategory_ids?.length)) {
             try {
                 const siteData = await fetchJSON(`${DEVFORUM}/site.json`);
@@ -872,7 +1133,7 @@ SERVER.registerTool("get_category_metadata", {
 });
 SERVER.registerTool("search_bugs", {
     title: "Search Bugs",
-    description: "Search for bug reports on the DevForum. One category at a time \u2014 Discourse does not support multiple category filters.",
+    description: "Search for bug reports on the DevForum. One category at a time.",
     inputSchema: z.object({
         query: z.string().describe("Search query"),
         category: z
@@ -890,7 +1151,10 @@ SERVER.registerTool("search_bugs", {
             return ok(`No bug reports found for "${query}" in ${category}.`);
         topics = sortByRelevance(topics);
         const userMap = searchUserMap(data);
-        const lines = topics.slice(0, limit).map((t) => topicLine(t, userMap)).join("\n\n");
+        const lines = topics
+            .slice(0, limit)
+            .map((t) => topicLine(t, userMap))
+            .join("\n\n");
         return ok(`Bug reports for "${query}" in ${category}:\n\n${lines}`);
     }
     catch (e) {
@@ -899,7 +1163,7 @@ SERVER.registerTool("search_bugs", {
 });
 SERVER.registerTool("get_solved_topics", {
     title: "Get Solved Topics",
-    description: "Search for solved DevForum topics. PREFERRED tool for debugging \u2014 use this before get_thread or get_post_replies.",
+    description: "Search for solved DevForum topics. PREFERRED tool for debugging.",
     inputSchema: z.object({
         query: z.string().describe("Search query"),
         limit: z.number().min(1).max(30).default(10).describe("Max results"),
@@ -946,125 +1210,6 @@ SERVER.registerTool("get_new_posts", {
         return err(e);
     }
 });
-// ─── Tools: API Reference ───────────────────────────────────────
-SERVER.registerTool("search_api_member", {
-    title: "Search API Member",
-    description: "Search for a property, method, event, or callback by name across ALL Roblox API classes. Useful to find where a member exists or what classes implement a specific interface.",
-    inputSchema: z.object({
-        query: z.string().describe("Member name to search for (e.g. Touched, Position, Destroy)"),
-        member_type: z
-            .enum(["Property", "Function", "Event", "Callback"])
-            .optional()
-            .describe("Filter by member type"),
-        limit: z.number().min(1).max(50).default(10).describe("Max results"),
-    }),
-}, async ({ query, member_type, limit }) => {
-    try {
-        const classes = await getApiDump();
-        const results = [];
-        const q = query.toLowerCase();
-        for (const cls of classes) {
-            for (const m of cls.Members ?? []) {
-                if (!m.Name.toLowerCase().includes(q))
-                    continue;
-                if (member_type && m.MemberType !== member_type)
-                    continue;
-                results.push({ className: cls.Name, member: m });
-            }
-        }
-        if (!results.length) {
-            return ok(`No API member found matching "${query}"${member_type ? ` of type ${member_type}` : ""}.`);
-        }
-        const lines = results
-            .slice(0, limit)
-            .map((r) => `\u2022 ${r.member.Name} (${r.member.MemberType}) in ${r.className}`)
-            .join("\n");
-        return ok(`Results for "${query}"${member_type ? ` [type: ${member_type}]` : ""}:\n\n${lines}`);
-    }
-    catch (e) {
-        return err(e);
-    }
-});
-SERVER.registerTool("get_class_hierarchy", {
-    title: "Get Class Hierarchy",
-    description: "Get the full inheritance tree for a Roblox class, showing all parent classes and direct subclasses.",
-    inputSchema: z.object({
-        class_name: z.string().describe('Engine class name (e.g. "BasePart", "RemoteEvent")'),
-    }),
-}, async ({ class_name }) => {
-    try {
-        const classes = await getApiDump();
-        const cls = classes.find((c) => c.Name.toLowerCase() === class_name.toLowerCase());
-        if (!cls)
-            return ok(`Class "${class_name}" not found.`);
-        // Parents
-        const chain = [cls.Name];
-        let curr = cls;
-        while (curr?.Superclass && curr.Superclass !== "<<<ROOT>>>") {
-            chain.push(curr.Superclass);
-            curr = classes.find((c) => c.Name === curr.Superclass);
-        }
-        // Subclasses (direct children)
-        const children = classes
-            .filter((c) => c.Superclass?.toLowerCase() === cls.Name.toLowerCase())
-            .map((c) => c.Name)
-            .sort();
-        let out = `# ${cls.Name} Hierarchy\n\n`;
-        out += `Chain: ${chain.join(" > ")}\n`;
-        if (children.length) {
-            out += `Direct subclasses: ${children.join(", ")}\n`;
-        }
-        else {
-            out += `Direct subclasses: none\n`;
-        }
-        // Total descendants
-        const totalDescendants = classes.filter((c) => c.Superclass &&
-            chain.some((ancestor) => ancestor.toLowerCase() === c.Superclass.toLowerCase())).length;
-        out += `Total inheriting classes: ${totalDescendants}\n`;
-        return ok(out);
-    }
-    catch (e) {
-        return err(e);
-    }
-});
-SERVER.registerTool("get_enum", {
-    title: "Get Enum",
-    description: "List or inspect Roblox API enums. If name is provided, returns all values for that enum. If omitted, returns list of all enums.",
-    inputSchema: z.object({
-        name: z.string().optional().describe('Enum name (e.g. "Material", "PartType")'),
-        filter: z.string().optional().describe("Filter enum names when listing"),
-    }),
-}, async ({ name, filter }) => {
-    try {
-        const data = await getApiDump();
-        // Collect all unique enum names from ValueType references
-        const enumSet = new Set();
-        for (const cls of data) {
-            for (const m of cls.Members ?? []) {
-                if (m.ValueType?.Category === "Enum")
-                    enumSet.add(m.ValueType.Name);
-            }
-        }
-        const enums = [...enumSet].sort();
-        if (name) {
-            const match = enums.find((e) => e.toLowerCase() === name.toLowerCase());
-            if (!match)
-                return ok(`Enum "${name}" not found.`);
-            // We don't have enum values in Full-API-Dump.json, just list existence
-            return ok(`Enum “${match}” exists in the Roblox API.\nIt is referenced as a ValueType on various classes.\nFor full values, see the Creator Docs enum page.`);
-        }
-        let list = enums;
-        if (filter) {
-            const f = filter.toLowerCase();
-            list = list.filter((e) => e.toLowerCase().includes(f));
-        }
-        return ok(`Roblox API Enums (${list.length} total):\n\n${list.slice(0, 100).join(", ")}`);
-    }
-    catch (e) {
-        return err(e);
-    }
-});
-// ─── Tools: Community Resources ─────────────────────────────────
 SERVER.registerTool("search_community_resources", {
     title: "Search Community Resources",
     description: "Search community tutorials and resources from the DevForum Resources and Tutorials categories.",
@@ -1090,12 +1235,48 @@ SERVER.registerTool("search_community_resources", {
         return err(e);
     }
 });
-// ─── Tools: Platform ────────────────────────────────────────────
+// ─── Creator Store ──────────────────────────────────────────────
+SERVER.registerTool("search_creator_store", {
+    title: "Search Creator Store",
+    description: "Search Roblox Creator Store (catalog) for assets: models, plugins, meshes, audio, decals. Returns asset ID, name, creator, price.",
+    inputSchema: z.object({
+        query: z.string().describe("Asset name or keyword"),
+        asset_type: z
+            .enum(["Models", "Audio", "Meshes", "Plugins", "Decals", "Animations", "Badges"])
+            .optional()
+            .describe("Optional asset category filter"),
+        limit: z.number().min(1).max(50).default(10).describe("Max results"),
+    }),
+}, async ({ query, asset_type, limit }) => {
+    try {
+        const items = await searchCreatorStore({ query, assetType: asset_type, limit });
+        if (!items.length)
+            return ok(`No results found for "${query}" in the Creator Store.`);
+        const lines = items.map((item) => {
+            const name = item.Name || "Untitled";
+            const creator = item.Creator?.Name || "unknown";
+            const id = item.AssetId;
+            const price = item.PriceInRobux !== undefined ? (item.PriceInRobux === null ? "N/A" : item.PriceInRobux === 0 ? "Free" : `R$${item.PriceInRobux}`) : "N/A";
+            return "\u2022 " + name + "\n  ID: " + id + " | Creator: " + creator + " | Price: " + price + "\n  https://www.roblox.com/library/" + id;
+        });
+        return ok(`Creator Store results for "${query}":\n\n${lines.join("\n\n")}`);
+    }
+    catch (e) {
+        return err(e);
+    }
+});
+// ─── Platform ───────────────────────────────────────────────────
 SERVER.registerTool("get_roblox_status", {
     title: "Get Roblox Status",
     description: "Check the current status of Roblox platform services (website, Studio, API, game servers, etc.)",
-    inputSchema: z.object({}),
-}, async () => {
+    inputSchema: z.object({
+        verbose: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe("Include incident descriptions"),
+    }),
+}, async ({ verbose }) => {
     try {
         const data = await getRobloxStatusData();
         const components = data.components || [];
@@ -1113,6 +1294,13 @@ SERVER.registerTool("get_roblox_status", {
                 out += `- ${name}\n`;
             }
             out += "\n";
+        }
+        // Active incidents
+        if (verbose && data.incidents?.length) {
+            out += `### Active Incidents\n`;
+            for (const inc of data.incidents) {
+                out += `- **${inc.name}**: ${inc.status}\n  ${inc.shortlink || ""}\n`;
+            }
         }
         return ok(out.trim());
     }
