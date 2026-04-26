@@ -292,19 +292,23 @@ interface StatusPage {
 function parseStatusHtml(html: string): StatusPage {
   const components: StatusComponent[] = [];
   const incidents: any[] = [];
-  const sectionRe = /<div[^>]*class="[^"]*component[^"]*"[^>]*>[\s\S]*?<\/div>/gi;
-  const nameRe = /<span[^>]*class="[^"]*name[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
-  const statusRe = /<span[^>]*class="[^"]*value[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
-  for (const block of html.match(sectionRe) || []) {
-    const name = (block.match(nameRe) || [])[1]?.trim();
-    const status = (block.match(statusRe) || [])[1]?.trim();
+  // Extract sub-components: container_name -> name, pull-right -> status
+  const subRe = /container_name[^>]*>([^<]+)<\/p>[\s\S]*?pull-right[^>]*>([^<]+)<\/p>/g;
+  let m;
+  while ((m = subRe.exec(html)) !== null) {
+    const name = m[1].trim();
+    const status = m[2].trim();
     if (name && status) components.push({ name, status });
   }
-  const incRe = /<div[^>]*class="[^"]*incident[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
-  for (const incBlock of html.match(incRe) || []) {
-    const incName = (incBlock.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i) || [])[1]?.trim();
-    const incStatus = (incBlock.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i) || [])[1]?.trim();
-    if (incName) incidents.push({ name: incName, status: incStatus || "unknown" });
+  // Extract top-level: component_name (without <i> icon) -> status
+  const topRe = /component_name[^>]*><i[^>]*><\/i>\s*(\w+)<\/p>[\s\S]*?component-status[^>]*>([^<]+)<\/p>/g;
+  while ((m = topRe.exec(html)) !== null) {
+    components.unshift({ name: m[1].trim(), status: m[2].trim() });
+  }
+  // Extract incidents from history section
+  const incRe = /class="white"><a[^>]*>([^<]+)<\/a>[\s\S]*?status_description">([^<]+)/g;
+  while ((m = incRe.exec(html)) !== null) {
+    incidents.push({ name: m[1].trim(), status: m[2].trim() });
   }
   return { page: { name: "Roblox", url: "https://status.roblox.com" }, components, incidents };
 }
