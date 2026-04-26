@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // =================================================================
-// roblox-devforum-mcp v4.0.0
+// roblox-devforum-mcp v4.2.3
 // State-of-the-art MCP server for Roblox Studio workflow
 // 27 tools: DevForum, API Dump, Creator Hub, Luau, Status, Creator Store
 // =================================================================
@@ -12,7 +12,7 @@ import * as z from "zod";
 
 // ─── Config ─────────────────────────────────────────────────────
 
-const VERSION = "4.0.0";
+const VERSION = "4.2.3";
 const DEVFORUM = "https://devforum.roblox.com";
 const CREATOR_DOCS = "https://create.roblox.com";
 const ROBLOX_STATUS = "https://status.roblox.com";

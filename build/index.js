@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 // =================================================================
-// roblox-devforum-mcp v4.0.0
+// roblox-devforum-mcp v4.2.3
 // State-of-the-art MCP server for Roblox Studio workflow
 // 27 tools: DevForum, API Dump, Creator Hub, Luau, Status, Creator Store
 // =================================================================
@@ -43,7 +43,7 @@ const mcp_js_1 = require("@modelcontextprotocol/sdk/server/mcp.js");
 const stdio_js_1 = require("@modelcontextprotocol/sdk/server/stdio.js");
 const z = __importStar(require("zod"));
 // ─── Config ─────────────────────────────────────────────────────
-const VERSION = "4.0.0";
+const VERSION = "4.2.3";
 const DEVFORUM = "https://devforum.roblox.com";
 const CREATOR_DOCS = "https://create.roblox.com";
 const ROBLOX_STATUS = "https://status.roblox.com";
