@@ -1,6 +1,6 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "MCP server for Roblox Developer Forum, Creator Hub docs, API Dump, and platform status — 23 tools with __NEXT_DATA__ extraction, search scoring, rate limit resilience",
   "main": "build/index.js",
   "bin": {
@@ -8,12 +8,16 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "watch": "tsc --watch"
   },
   "keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs", "api-dump"],
   "author": "EL4CTEO",
   "license": "UNLICENSED",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
     "zod": "^3.25.0"
