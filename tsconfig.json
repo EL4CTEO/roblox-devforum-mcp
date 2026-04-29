@@ -6,11 +6,17 @@
     "outDir": "build",
     "rootDir": "src",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true
+    "declaration": true,
+    "sourceMap": true,
+    "types": ["node"]
   },
   "include": ["src/**/*"]
 }

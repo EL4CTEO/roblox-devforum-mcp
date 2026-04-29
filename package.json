@@ -1,22 +1,54 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "4.2.3","description": "MCP server for Roblox Developer Forum, Creator Hub docs, API Dump, Creator Store, Luau docs, and platform status — 27 tools with __NEXT_DATA__ extraction, real enum values, asset details, HTML scraping, accepted answers, ETag cache, search scoring","keywords": ["mcp", "roblox", "devforum", "discourse", "creator-docs", "api-dump", "creator-store", "luau"],
+  "version": "5.0.0",
+  "description": "Agent-first MCP server for Roblox: DevForum, Creator Hub docs, API Dump, Creator Store, Luau docs, platform status. 7 consolidated tools, Resources with URI templates, Prompts, structured output, MCP logging, persistent cache.",
+  "keywords": [
+    "mcp",
+    "roblox",
+    "devforum",
+    "discourse",
+    "creator-docs",
+    "api-dump",
+    "creator-store",
+    "luau",
+    "agent"
+  ],
   "author": "EL4CTEO",
   "license": "UNLICENSED",
   "private": true,
+  "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
+  "bin": {
+    "roblox-devforum-mcp": "build/index.js"
+  },
+  "main": "build/index.js",
+  "files": [
+    "build",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src tests",
+    "lint:fix": "biome check --write src tests",
+    "format": "biome format --write src tests",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
+    "cheerio": "^1.0.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
   }
 }
