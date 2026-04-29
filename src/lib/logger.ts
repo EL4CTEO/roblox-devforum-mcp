@@ -50,10 +50,10 @@ class McpLogger implements Logger {
 
     if (sent && typeof (sent as Promise<unknown>).catch === "function") {
       (sent as Promise<unknown>).catch(() => {
-        process.stderr.write(`[${level}] ${msg}\n`);
+        writeFallback(level, msg);
       });
     } else if (!this.server) {
-      process.stderr.write(`[${level}] ${msg}\n`);
+      writeFallback(level, msg);
     }
   }
 
@@ -71,6 +71,16 @@ class McpLogger implements Logger {
   }
   error(msg: string, data?: Record<string, unknown>): void {
     this.emit("error", msg, data);
+  }
+}
+
+function writeFallback(level: LogLevel, msg: string): void {
+  const line = `[${level}] ${msg}\n`;
+  const proc = (globalThis as { process?: { stderr?: { write?: (s: string) => void } } }).process;
+  if (proc?.stderr?.write) {
+    proc.stderr.write(line);
+  } else {
+    console.error(line.trimEnd());
   }
 }
 

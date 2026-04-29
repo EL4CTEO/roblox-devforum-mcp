@@ -1,0 +1,5 @@
+# Local-only secret file for `wrangler dev`.
+# Copy to `.dev.vars` (gitignored) and replace the value.
+# In production, set with: wrangler secret put AUTH_TOKEN
+
+AUTH_TOKEN="replace-with-a-long-random-string"

@@ -43,7 +43,14 @@ const EnvSchema = z.object({
 
 export type Config = z.infer<typeof EnvSchema>;
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export type EnvLike = Record<string, unknown>;
+
+function defaultEnv(): EnvLike {
+  const proc = (globalThis as { process?: { env?: EnvLike } }).process;
+  return proc?.env ?? {};
+}
+
+export function loadConfig(env: EnvLike = defaultEnv()): Config {
   const parsed = EnvSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues

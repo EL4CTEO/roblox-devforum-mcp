@@ -1,7 +1,7 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "5.0.0",
-  "description": "Agent-first MCP server for Roblox: DevForum, Creator Hub docs, API Dump, Creator Store, Luau docs, platform status. 7 consolidated tools, Resources with URI templates, Prompts, structured output, MCP logging, persistent cache.",
+  "version": "5.1.0",
+  "description": "Agent-first MCP server for Roblox: DevForum, Creator Hub docs, API Dump, Creator Store, Luau docs, platform status. 7 consolidated tools, Resources with URI templates, Prompts, structured output, MCP logging, persistent cache. Runs locally over stdio (Claude Desktop) and remotely as a Cloudflare Worker (mobile / Connector).",
   "keywords": [
     "mcp",
     "roblox",
@@ -38,17 +38,28 @@
     "format": "biome format --write src tests",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "cf-typegen": "wrangler types --include-runtime=false ./worker-configuration.d.ts",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
+    "worker:secret": "wrangler secret put AUTH_TOKEN",
+    "worker:tail": "wrangler tail"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "agents": "^0.7.9",
     "cheerio": "^1.0.0",
     "zod": "^3.25.0"
   },
+  "overrides": {
+    "@modelcontextprotocol/sdk": "1.26.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@cloudflare/workers-types": "^4.20260429.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "wrangler": "^4.86.0"
   }
 }

@@ -5,3 +5,6 @@ coverage/
 .DS_Store
 .vitest-cache/
 .cache/
+.wrangler/
+.dev.vars
+worker-configuration.d.ts

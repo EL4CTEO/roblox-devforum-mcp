@@ -1,5 +1,39 @@
 # Changelog
 
+## 5.1.0
+
+Adds a remote transport so the same MCP server can be used as a Claude Connector
+on **desktop, web, and mobile** in addition to the existing local stdio install.
+
+### Added
+
+- **Cloudflare Worker entry** (`src/worker.ts`) using `agents/mcp` `McpAgent`
+  and Streamable HTTP at `/mcp`. The Worker is single-tenant and protected by a
+  `AUTH_TOKEN` Bearer secret (constant-time compare); unauthenticated requests
+  receive `401 Unauthorized` with a `WWW-Authenticate` challenge. A `/healthz`
+  endpoint reports liveness without auth.
+- **Wrangler config** (`wrangler.jsonc`) with the `RobloxDevforumMcp` Durable
+  Object binding (`MCP_OBJECT`) and SQLite-class migration; observability
+  enabled.
+- **Cross-runtime logger and config**: `logger.ts` no longer assumes Node
+  `process.stderr` (falls back to `console.error` in Workers); `loadConfig`
+  accepts any env-like record so it can take Wrangler `Env` directly.
+- **`registerAll(server, ctx)`** export from `src/server.ts` so the Node stdio
+  entry and the Worker entry share identical tool/resource/prompt registration.
+- **Scripts**: `worker:dev`, `worker:deploy`, `worker:secret`, `worker:tail`,
+  `cf-typegen`.
+- **`.dev.vars.example`** + `.gitignore` updates so secrets stay out of git.
+- **README**: full Connector setup walkthrough (Wrangler login → secret →
+  deploy → claude.ai add-connector with `Authorization: Bearer …`).
+
+### Changed
+
+- Pinned `@modelcontextprotocol/sdk` to `1.26.0` and added a top-level
+  `overrides` so the root project and the transitive dep inside `agents` share
+  one SDK instance (otherwise TypeScript flagged two structurally-different
+  `McpServer` types).
+- Bumped to **5.1.0**.
+
 ## 5.0.0
 
 Major rework: agent-first redesign.
