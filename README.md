@@ -1,74 +1,64 @@
 # roblox-devforum-mcp
 
-State-of-the-art MCP server for the Roblox developer workflow. **27 tools** covering DevForum, Creator Hub Docs, API Dump, Luau Standard Library, Creator Store, and Platform Status. No authentication required.
+Agent-first MCP server for the Roblox developer workflow. **7 consolidated tools** + Resources with URI templates + Prompts, covering DevForum, Creator Hub Docs, Luau standard library, Full-API-Dump, Creator Store, and Platform Status. No authentication required.
 
-## Features
+> Built to pair with the official Roblox Studio MCP server: this one supplies the *research context* (forum threads, API definitions, docs, bugs, status) that an AI agent needs while it's building inside Studio.
 
-- **Real API Enum values** — actual integer values from Full-API-Dump.json (e.g. `Plastic = 256`)
-- **Creator Store asset details** — name, creator, price via economy API
-- **Accepted answer extraction** — solved threads show the accepted reply inline
-- **Object tag formatting** — handles `{read, write}` security objects (no `[object Object]`)
-- **Creator Hub `__NEXT_DATA__` extraction** — structured docs without JS rendering
-- **Roblox Status HTML scraping** — live component status + active incidents
-- **Luau standard library scraping** — function signatures from luau-lang.org
-- **Site-search fallback** — DuckDuckGo `site:create.roblox.com` for Creator Hub docs
-- **ETag conditional caching** — HTTP 304 responses extend cache TTL (LRU, 200 entries, 5min TTL)
-- **Search scoring** — relevance-ranked with solved boost, category weight, recency decay
-- **Rate limit resilience** — exponential backoff + jitter, 3 retries, 15s timeout
-- **Per-post truncation** — `max_length` on thread replies to keep context manageable
+## Why 7 tools and not 27
 
-## Tools (27)
+LLM agents perform much better when each tool has a clear, orthogonal purpose. The previous version exposed 11 different "search the forum" tools — the new `forum_search` does all of it via parameters (`status`, `category`, `tag`, `period`, `sort`, `user`). Same for the API surface, docs surface, etc.
 
-### DevForum (12)
+| Tool              | What it does                                                                                              |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `forum_search`    | Unified DevForum search: free-text + filters (`status:solved`, `category`, `tag`, `period`, `sort`, `user`). |
+| `forum_thread`    | Thread metadata + first post + accepted answer + paginated replies (with optional truncation).            |
+| `forum_taxonomy`  | List categories or tags, or fetch metadata for one category.                                              |
+| `roblox_api`      | Classes / members / hierarchy / enums from the live `Full-API-Dump.json`.                                  |
+| `roblox_docs`     | Creator Hub pages, Luau stdlib reference, community DevForum tutorials.                                    |
+| `platform_status` | Live Roblox component status + active incidents.                                                          |
+| `creator_store`   | Search the Roblox catalog (models, plugins, audio, meshes, decals, animations, badges).                    |
 
-| Tool | Description |
-|------|-------------|
-| `get_announcements` | Latest DevForum announcements |
-| `get_latest_posts` | Latest posts, optionally filtered by category |
-| `search_devforum` | Search topics by query with `[SOLVED]` indicators |
-| `get_thread` | Read a thread (first post + metadata + accepted answer) |
-| `get_post_replies` | Thread replies (paginated, with `max_length` truncation) |
-| `get_action_required` | Topics tagged action-required |
-| `get_engine_updates` | Roblox engine & Studio release notes |
-| `get_category` | Topics from a specific category by slug and ID |
-| `get_category_metadata` | Category info, subcategories, moderators, topic count |
-| `get_top_posts` | Top posts by period (daily/weekly/monthly/yearly/all) |
-| `get_new_posts` | Newest topics (chronological) |
-| `get_user_posts` | Recent activity for a DevForum user |
+Every tool returns both a human-readable markdown block (in `content`) and a structured payload (in `structuredContent`) validated against an explicit `outputSchema`, so the agent can read structured fields directly instead of parsing prose.
 
-### Search & Debugging (4)
+All tools carry MCP annotations: `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` — clients can parallelize them safely.
 
-| Tool | Description |
-|------|-------------|
-| `get_solved_topics` | Search solved topics (preferred for debugging) |
-| `search_bugs` | Search bug reports (studio-bugs / engine-bugs) |
-| `get_categories` | List all DevForum categories with IDs and topic counts |
-| `get_tags` | List all DevForum tags with topic counts |
+## Resources (URI templates)
 
-### Creator Hub & Docs (5)
+Stable URIs the agent (or its host) can dereference, cite, or cache:
 
-| Tool | Description |
-|------|-------------|
-| `get_creator_docs` | Fetch any Creator Hub doc with `__NEXT_DATA__` extraction |
-| `search_creator_docs` | Search Creator Hub docs via DevForum + DuckDuckGo fallback |
-| `get_luau_docs` | Luau standard library reference (math, string, table, etc.) |
-| `get_api_docs` | Full Roblox engine class docs with descriptions and object tags |
-| `search_community_resources` | Search community tutorials and resources |
+```
+roblox-api://classes                       # index of every class
+roblox-api://enums                         # index of every enum
+roblox-api://class/{className}             # full class definition
+roblox-api://enum/{enumName}               # enum items + integer values
+roblox-luau://stdlib/{module}              # math / string / table / coroutine / bit32 / utf8 / os / debug / buffer / vector
+roblox-devforum://thread/{topicId}         # full Discourse thread JSON
+roblox-devforum://category/{slug}          # latest topics in a category
+roblox-docs://creator/{+path}              # Creator Hub doc page
+```
 
-### API Reference (3)
+Class- and enum-name templates also support **completions**, so MCP clients can autocomplete names from the live API dump.
 
-| Tool | Description |
-|------|-------------|
-| `search_api_member` | Search for a member across ALL Roblox API classes |
-| `get_class_hierarchy` | Full inheritance tree (parents + subclasses) |
-| `get_enum` | Inspect any Roblox enum — real Names + Values from API Dump |
+## Prompts
 
-### Platform & Store (3)
+Pre-built workflows that an agent can invoke directly:
 
-| Tool | Description |
-|------|-------------|
-| `get_roblox_status` | Current status of Roblox services with active incidents |
-| `search_creator_store` | Search Creator Store for assets (name, creator, price, URL) |
+- `research-feature(feature)` — class lookup → solved threads → known bugs → official guides.
+- `explain-error(error_message, context?)` — debug pipeline that prefers `[SOLVED]` evidence.
+- `find-implementation-pattern(goal)` — Creator Docs + community tutorials + top forum patterns.
+- `audit-deprecated-api(target)` — checks deprecation tags, engine update announcements, and migration guides.
+
+## Engineering
+
+- **Cache** — LRU (configurable size + TTL), ETag-aware (sends `If-None-Match`, treats 304 as a cache hit and extends TTL), stale-while-revalidate fallback when an upstream refresh fails.
+- **API Dump** — auto-refreshed with a 24h TTL (configurable), inflight-request deduplication, falls back to stale data on transient errors.
+- **HTTP client** — exponential backoff with jitter, configurable retries, per-host **circuit breaker** (5 failures in 60s opens for 30s, all configurable).
+- **HTML parsing** — `cheerio` first, regex fallback retained for the Roblox status page when class names change.
+- **MCP logging** — uses `notifications/message`; respects the client's `setLoggingLevel`.
+- **Type safety** — `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`; almost no `any` in user-visible paths.
+- **Tests** — `vitest` covering cache, scoring, sanitize, htmlParse, circuit breaker, Discourse helpers, the HTTP client (retry / 304 / fallback), and server bootstrap.
+- **Lint + format** — Biome, single config.
+- **CI** — GitHub Actions on Node 20 and 22 (`lint → typecheck → test → build`).
 
 ## Install
 
@@ -82,8 +72,6 @@ npm run build
 ## Configure
 
 ### Claude Desktop
-
-Add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -104,8 +92,6 @@ claude mcp add roblox-devforum -- node /path/to/roblox-devforum-mcp/build/index.
 
 ### opencode
 
-Add to `opencode.json`:
-
 ```json
 {
   "mcp": {
@@ -117,10 +103,37 @@ Add to `opencode.json`:
 }
 ```
 
+## Configuration (env vars)
+
+All optional — sensible defaults. Set in your MCP client config under `env`.
+
+| Variable                   | Default     | Purpose                                                    |
+| -------------------------- | ----------- | ---------------------------------------------------------- |
+| `RDFM_LOG_LEVEL`           | `info`      | `debug` / `info` / `notice` / `warning` / `error`.         |
+| `RDFM_FETCH_TIMEOUT_MS`    | `15000`     | Per-request timeout.                                       |
+| `RDFM_CACHE_TTL_MS`        | `300000`    | Default cache TTL (5 minutes).                             |
+| `RDFM_CACHE_MAX`           | `200`       | LRU cache size.                                            |
+| `RDFM_API_DUMP_TTL_MS`     | `86400000`  | Full-API-Dump refresh interval (24 h).                     |
+| `RDFM_MAX_RETRIES`         | `3`         | Retries on transient errors / 429.                         |
+| `RDFM_BASE_BACKOFF_MS`     | `1000`      | Backoff base; delay = `base * 2^attempt + jitter`.         |
+| `RDFM_USER_AGENT`          | `Mozilla/…` | Outgoing User-Agent.                                       |
+| `RDFM_CIRCUIT_THRESHOLD`   | `5`         | Failures-in-window before the breaker trips.               |
+| `RDFM_CIRCUIT_WINDOW_MS`   | `60000`     | Failure window.                                            |
+| `RDFM_CIRCUIT_COOLDOWN_MS` | `30000`     | Cooldown before the breaker half-opens.                    |
+
+## Development
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm run lint        # Biome
+npm run test        # Vitest
+npm run check       # lint + typecheck + test
+npm run build       # tsc → build/
+```
+
 ## Requirements
 
-- Node.js >= 20.0.0
-- No API keys or authentication required
+- Node.js >= 20
 
 ## License
 
