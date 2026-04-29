@@ -69,7 +69,9 @@ npm install
 npm run build
 ```
 
-## Configure
+## Configure — local (stdio)
+
+Use this for Claude Desktop / Claude Code / opencode on the same machine. Faster than HTTP, no auth needed, no internet round-trip.
 
 ### Claude Desktop
 
@@ -103,12 +105,59 @@ claude mcp add roblox-devforum -- node /path/to/roblox-devforum-mcp/build/index.
 }
 ```
 
-## Configuration (env vars)
+## Configure — remote (Claude Connector / mobile / web)
 
-All optional — sensible defaults. Set in your MCP client config under `env`.
+Deploy as a Cloudflare Worker so claude.ai (desktop, web, **and mobile**) can use it as a Connector. The Worker is single-tenant and protected by a Bearer token: only requests that present the token reach the MCP server. Source code stays in your private repo and your private Cloudflare account.
+
+### One-time setup
+
+1. **Cloudflare account** + Wrangler login (free):
+   ```bash
+   npx wrangler login
+   ```
+2. **Pick a long random token** (e.g. `openssl rand -hex 32`) and store it as a secret on the Worker:
+   ```bash
+   npm run worker:secret           # prompts for the token, stores it as AUTH_TOKEN
+   ```
+3. **Deploy**:
+   ```bash
+   npm run worker:deploy
+   ```
+   Wrangler prints the Worker URL (e.g. `https://roblox-devforum-mcp.<you>.workers.dev`). Your MCP endpoint is `<URL>/mcp`.
+
+### Add as a Connector in claude.ai
+
+claude.ai → Settings → Connectors → **Add custom connector**:
+
+- **Name**: Roblox DevForum
+- **URL**: `https://roblox-devforum-mcp.<you>.workers.dev/mcp`
+- **Authentication**: Custom header
+  - Header name: `Authorization`
+  - Header value: `Bearer <your AUTH_TOKEN>`
+
+Once added, the connector is available across desktop, web, and the mobile apps under the same account. All seven tools, the Resources, and the Prompts are exposed.
+
+### Local Worker development
+
+```bash
+cp .dev.vars.example .dev.vars      # set AUTH_TOKEN locally (not committed)
+npm run worker:dev                  # runs at http://localhost:8787
+npm run worker:tail                 # stream live logs from the deployed Worker
+```
+
+### Privacy / scope
+
+- The Worker URL is technically reachable on the public internet, but **every** request to `/mcp` requires the correct Bearer token; everything else returns `401 Unauthorized`.
+- The repo stays private — Cloudflare doesn't publish your source.
+- The token compares in constant time and is a Wrangler secret (never logged, never in git).
+
+## Configuration (env vars / Wrangler vars)
+
+All optional — sensible defaults. Set them under `env` in the MCP client config (stdio) or via `wrangler secret put` / Wrangler `[vars]` (Worker). The `AUTH_TOKEN` secret is **only** consumed by the Worker entry.
 
 | Variable                   | Default     | Purpose                                                    |
 | -------------------------- | ----------- | ---------------------------------------------------------- |
+| `AUTH_TOKEN`               | _(unset)_   | Bearer token required by the Worker `/mcp` endpoint.       |
 | `RDFM_LOG_LEVEL`           | `info`      | `debug` / `info` / `notice` / `warning` / `error`.         |
 | `RDFM_FETCH_TIMEOUT_MS`    | `15000`     | Per-request timeout.                                       |
 | `RDFM_CACHE_TTL_MS`        | `300000`    | Default cache TTL (5 minutes).                             |
@@ -124,11 +173,17 @@ All optional — sensible defaults. Set in your MCP client config under `env`.
 ## Development
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm run lint        # Biome
-npm run test        # Vitest
-npm run check       # lint + typecheck + test
-npm run build       # tsc → build/
+npm run typecheck       # tsc --noEmit
+npm run lint            # Biome
+npm run test            # Vitest
+npm run check           # lint + typecheck + test
+npm run build           # tsc → build/
+
+# Cloudflare Worker
+npm run worker:dev      # wrangler dev (local HTTP at :8787)
+npm run worker:deploy   # wrangler deploy
+npm run worker:secret   # wrangler secret put AUTH_TOKEN
+npm run worker:tail     # wrangler tail (live logs)
 ```
 
 ## Requirements
