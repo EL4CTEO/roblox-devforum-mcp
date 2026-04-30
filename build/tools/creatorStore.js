@@ -84,6 +84,7 @@ export function register(server, ctx) {
                 .map((i) => i.id);
             const needDetails = input.include_details || mustFilter;
             let assets = [];
+            let typeFallback = false;
             if (needDetails && ids.length > 0) {
                 const overfetch = mustFilter ? Math.min(ids.length + 10, 50) : ids.length;
                 const detailIds = ids.slice(0, overfetch);
@@ -101,7 +102,13 @@ export function register(server, ctx) {
                 }));
                 let filtered = fetched.filter((a) => a !== null);
                 if (mustFilter) {
-                    filtered = filtered.filter((a) => a.AssetTypeId === assetTypeId);
+                    const typeFiltered = filtered.filter((a) => a.AssetTypeId === assetTypeId);
+                    if (typeFiltered.length > 0) {
+                        filtered = typeFiltered;
+                    }
+                    else {
+                        typeFallback = true;
+                    }
                 }
                 assets = filtered.slice(0, input.limit);
             }
@@ -135,7 +142,15 @@ export function register(server, ctx) {
             if (norm.normalized) {
                 structured.warning = `limit normalized from ${input.limit} to ${norm.value} (Roblox catalog only accepts ${VALID_LIMITS.join(", ")})`;
             }
-            return ok(`Creator Store results for "${input.query}":\n\n${text}`, structured);
+            if (typeFallback) {
+                structured.warning = structured.warning
+                    ? `${structured.warning}. Showing unfiltered catalog results (no ${input.asset_type} matches found)`
+                    : `Showing unfiltered catalog results (no ${input.asset_type} matches found)`;
+            }
+            let header = `Creator Store results for "${input.query}"`;
+            if (typeFallback)
+                header += ` (no ${input.asset_type} matches — showing unfiltered)`;
+            return ok(`${header}:\n\n${text}`, structured);
         }
         catch (e) {
             return fail(e);
