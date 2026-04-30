@@ -12,7 +12,6 @@
     "type": "git",
     "url": "https://github.com/EL4CTEO/roblox-devforum-mcp"
   },
-  "icon": "icon.png",
   "keywords": ["roblox", "devforum", "api", "luau", "creator-store", "game-development"],
   "license": "UNLICENSED",
   "server": {
