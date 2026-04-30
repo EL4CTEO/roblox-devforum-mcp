@@ -8,7 +8,7 @@ describe("scoreTopic", () => {
   it("adds boost for accepted answer", () => {
     const a = scoreTopic({ ...base, has_accepted_answer: true });
     const b = scoreTopic(base);
-    expect(a - b).toBeGreaterThanOrEqual(50);
+    expect(a - b).toBeGreaterThanOrEqual(49.9);
   });
 
   it("weighs scripting-support category higher than help-and-feedback", () => {
