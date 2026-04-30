@@ -1,0 +1,55 @@
+{
+  "$comment": "Copy the relevant block into your MCP client config.",
+  "$comment2": "Replace /path/to/ with your actual clone path.",
+
+  "claude-desktop": {
+    "mcpServers": {
+      "roblox-devforum": {
+        "command": "node",
+        "args": ["/path/to/roblox-devforum-mcp/build/index.js"]
+      }
+    }
+  },
+
+  "opencode": {
+    "mcp": {
+      "roblox-devforum": {
+        "type": "local",
+        "command": ["node", "/path/to/roblox-devforum-mcp/build/index.js"]
+      }
+    }
+  },
+
+  "windows": {
+    "opencode": {
+      "mcp": {
+        "roblox-devforum": {
+          "type": "local",
+          "command": ["cmd.exe", "/c", "node", "C:\\path\\to\\roblox-devforum-mcp\\build\\index.js"]
+        }
+      }
+    }
+  },
+
+  "claude-code": {
+    "$comment": "Run in terminal:",
+    "$command": "claude mcp add roblox-devforum -- node /path/to/roblox-devforum-mcp/build/index.js"
+  },
+
+  "cloudflare-worker": {
+    "$comment": "Deploy once, then add as Connector in claude.ai Settings.",
+    "$setup": [
+      "npx wrangler login",
+      "npm run worker:secret",
+      "npm run worker:deploy"
+    ],
+    "connector": {
+      "name": "Roblox DevForum",
+      "url": "https://roblox-devforum-mcp.YOURNAME.workers.dev/mcp",
+      "auth": {
+        "header": "Authorization",
+        "value": "Bearer YOUR_AUTH_TOKEN"
+      }
+    }
+  }
+}
