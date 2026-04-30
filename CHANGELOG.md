@@ -1,5 +1,27 @@
 # Changelog
 
+## 5.1.1
+
+Bug-fix release addressing issues found during comprehensive QA testing.
+
+### Fixed
+
+- **Creator Hub docs**: Pages use client-side rendering with compiled MDX JS in
+  `__NEXT_DATA__.data.content`. Replaced broken cheerio DOM extraction with
+  `extractJsxText()` regex that extracts readable text from JSX `children:`
+  props.
+- **Creator Store category filtering**: Removed incorrect numeric category IDs
+  (13=Audio returned 400, 12=Plugins returned wrong results). Now searches
+  without a `Category` parameter and filters by `AssetTypeId` (10=Model, 3=Audio,
+  12=Plugins, 34=Mesh, 13=Decal, 24=Animation, 21=Badge). When no items match
+  the requested asset type, falls back gracefully to unfiltered results with a
+  warning.
+- **forum_search top sort**: Fixed URL from `/top/{period}.json` to
+  `/top.json?period={period}` per Discourse API.
+- **forum_taxonomy category_meta**: Added `site.json` fallback when
+  `c/{id}/show.json` and `c/{id}.json` both fail.
+- **Flaky scoring test**: Increased tolerance from exact match to `49.9`.
+
 ## 5.1.0
 
 Adds a remote transport so the same MCP server can be used as a Claude Connector

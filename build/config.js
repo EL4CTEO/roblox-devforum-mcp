@@ -1,5 +1,5 @@
 import * as z from "zod";
-export const VERSION = "5.1.0";
+export const VERSION = "5.1.1";
 export const URLS = {
     devforum: "https://devforum.roblox.com",
     creatorDocs: "https://create.roblox.com/docs",
