@@ -47,7 +47,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.26.0",
-    "agents": "^0.7.9",
     "cheerio": "^1.0.0",
     "typescript": "^5.7.0",
     "zod": "^3.25.0"
@@ -59,6 +58,7 @@
     "@biomejs/biome": "^1.9.0",
     "@cloudflare/workers-types": "^4.20260429.0",
     "@types/node": "^22.0.0",
+    "agents": "^0.7.9",
     "vitest": "^2.1.0",
     "wrangler": "^4.86.0"
   }
