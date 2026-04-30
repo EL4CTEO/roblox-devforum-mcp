@@ -14,28 +14,25 @@ const AssetType = z.enum([
   "Badges",
 ]);
 
-const CATEGORY_MAP: Record<string, string> = {
-  Models: "Models",
-  Audio: "Audio",
-  Meshes: "Meshes",
-  Plugins: "Plugins",
-  Decals: "Decals",
-  Animations: "Animations",
-  Badges: "Badges",
+const ASSET_TYPE_IDS: Record<string, number> = {
+  Models: 10,
+  Audio: 3,
+  Meshes: 34,
+  Plugins: 12,
+  Decals: 13,
+  Animations: 24,
+  Badges: 21,
 };
 
-function toCatalogCategory(assetType: string): number {
-  const map: Record<string, number> = {
-    Models: 11,
-    Audio: 13,
-    Meshes: 40,
-    Plugins: 12,
-    Decals: 4,
-    Animations: 24,
-    Badges: 21,
-  };
-  return map[assetType] ?? 11;
-}
+const CATEGORIES_WITH_FILTER: Record<string, number> = {
+  Models: 11,
+  Plugins: 12,
+  Audio: 13,
+  Meshes: 40,
+  Decals: 4,
+  Animations: 24,
+  Badges: 21,
+};
 
 const inputShape = {
   query: z.string().describe("Asset name or keyword."),
@@ -89,6 +86,7 @@ interface AssetDetails {
   Creator?: { Name?: string };
   PriceInRobux?: number | null;
   ThumbnailUrl?: string | null;
+  AssetTypeId?: number;
 }
 
 function formatPrice(p: number | null | undefined): string {
@@ -117,18 +115,23 @@ export function register(server: McpServer, ctx: AppContext): void {
       const input = raw as Input;
       try {
         const norm = normalizeLimit(Math.min(input.limit, 30));
-        const categoryId = toCatalogCategory(input.asset_type);
-        const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=${categoryId}&SortType=Relevance&Limit=${norm.value}&Keyword=${encodeURIComponent(input.query)}`;
+        const assetTypeId = ASSET_TYPE_IDS[input.asset_type];
+        const categoryId = CATEGORIES_WITH_FILTER[input.asset_type];
+        const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=${categoryId ?? 11}&SortType=Relevance&Limit=${norm.value}&Keyword=${encodeURIComponent(input.query)}`;
         const search = await ctx.http.getJson<SearchResp>(searchUrl);
-        const ids = (search.data ?? [])
+        const allItems = search.data ?? [];
+        const ids = allItems
           .filter((i) => i.itemType === "Asset")
-          .slice(0, input.limit)
           .map((i) => i.id);
 
+        const mustFilter = assetTypeId !== 10;
+        const needDetails = input.include_details || mustFilter;
         let assets: AssetDetails[] = [];
-        if (input.include_details && ids.length > 0) {
+        if (needDetails && ids.length > 0) {
+          const overfetch = mustFilter ? Math.min(ids.length + 10, 50) : ids.length;
+          const detailIds = ids.slice(0, overfetch);
           const fetched = await Promise.all(
-            ids.map(async (id) => {
+            detailIds.map(async (id) => {
               try {
                 return await ctx.http.getJson<AssetDetails>(
                   `https://economy.roblox.com/v2/assets/${id}/details`
@@ -142,9 +145,13 @@ export function register(server: McpServer, ctx: AppContext): void {
               }
             })
           );
-          assets = fetched.filter((a): a is AssetDetails => a !== null);
+          let filtered = fetched.filter((a): a is AssetDetails => a !== null);
+          if (mustFilter) {
+            filtered = filtered.filter((a) => a.AssetTypeId === assetTypeId);
+          }
+          assets = filtered.slice(0, input.limit);
         } else {
-          assets = ids.map((id) => ({ AssetId: id }));
+          assets = ids.slice(0, input.limit).map((id) => ({ AssetId: id }));
         }
 
         const results = assets.map((a) => ({

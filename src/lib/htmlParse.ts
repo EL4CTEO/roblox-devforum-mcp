@@ -109,30 +109,6 @@ export function parseDuckDuckGoSiteResults(html: string): SearchResult[] {
   return results.slice(0, 10);
 }
 
-export function extractJsxChildren(code: string): string {
-  const parts: string[] = [];
-  const re = /children:\s*["']([^"']+)["']/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code)) !== null) {
-    const text = (m[1] ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").trim();
-    if (text) parts.push(text);
-  }
-  return parts.join("\n");
-}
-
-export function extractJsxComponent(next: Record<string, unknown>): string | null {
-  const props = next.props as Record<string, unknown> | undefined;
-  const pageProps = props?.pageProps as Record<string, unknown> | undefined;
-  if (!pageProps) return null;
-  for (const key of Object.keys(pageProps)) {
-    const val = pageProps[key];
-    if (typeof val === "string" && val.includes("function") && val.includes("jsx")) {
-      return extractJsxChildren(val);
-    }
-  }
-  return null;
-}
-
 export function extractNextData(html: string): unknown {
   const match = html.match(
     /<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/
@@ -143,6 +119,38 @@ export function extractNextData(html: string): unknown {
   } catch {
     return null;
   }
+}
+
+export function extractCreatorContent(html: string): { title: string; description: string; body: string } {
+  const $ = cheerio.load(html);
+  let title = "";
+  let description = "";
+  const titleEl = $("title").first();
+  if (titleEl.length) title = titleEl.text().trim();
+  const metaDesc = $('meta[name="description"]').first();
+  if (metaDesc.length) description = metaDesc.attr("content") ?? "";
+  const article = $("article").first();
+  const container = article.length ? article : $("main").first();
+  const root = container.length ? container : $("body");
+  const elements = root.find("h1, h2, h3, h4, p, li, pre, code, td, th, strong");
+  const parts: string[] = [];
+  elements.each((_, el) => {
+    const $el = $(el);
+    const tag = $el.prop("tagName")?.toLowerCase() ?? "";
+    const text = $el.text().trim();
+    if (!text) return;
+    if (tag.match(/^h[1-4]$/)) {
+      const level = parseInt(tag[1] ?? "1");
+      parts.push("\n" + "#".repeat(level) + " " + text + "\n");
+    } else if (tag === "pre" || tag === "code") {
+      parts.push("\n```\n" + text + "\n```\n");
+    } else if (tag === "li") {
+      parts.push("- " + text);
+    } else {
+      parts.push(text);
+    }
+  });
+  return { title, description, body: parts.join("\n\n") };
 }
 
 export function flattenDocBody(body: unknown): string {

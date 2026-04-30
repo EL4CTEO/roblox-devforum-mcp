@@ -1,7 +1,7 @@
 import * as z from "zod";
 import { URLS } from "../config.js";
 import { buildSearchUserMap, toForumHit } from "../lib/discourse.js";
-import { LUAU_LIBRARY_NAMES, extractNextData, extractJsxComponent, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
+import { LUAU_LIBRARY_NAMES, extractNextData, extractCreatorContent, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
 import { fail, ok } from "../lib/responses.js";
 import { stripHtml } from "../lib/sanitize.js";
 import { sortByRelevance } from "../lib/scoring.js";
@@ -43,48 +43,35 @@ async function fetchCreatorPage(ctx, path) {
     const url = `${URLS.creatorDocs.replace(/\/docs$/, "")}/${cleanPath}`;
     const html = await ctx.http.getHtml(url);
     const next = extractNextData(html);
-    if (!next) {
-        return {
-            url,
-            title: cleanPath,
-            content: stripHtml(html).slice(0, 4000),
-        };
-    }
-    const pageProps = next.props?.pageProps;
-    const doc = pageProps?.doc ??
-        pageProps?.data;
-    if (doc) {
-        const title = String(doc.title ?? doc.name ?? cleanPath);
-        let content = "";
-        if (doc.description)
-            content += `${doc.description}\n\n`;
-        if (doc.body)
-            content += flattenDocBody(doc.body);
-        else if (doc.content) {
-            const c = doc.content;
-            content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c);
+    if (next) {
+        const pageProps = next.props?.pageProps;
+        const doc = pageProps?.doc ??
+            pageProps?.data;
+        if (doc) {
+            const title = String(doc.title ?? doc.name ?? cleanPath);
+            let content = "";
+            if (doc.description)
+                content += `${doc.description}\n\n`;
+            if (doc.body)
+                content += flattenDocBody(doc.body);
+            else if (doc.content) {
+                const c = doc.content;
+                content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c);
+            }
+            if (content.trim())
+                return { url, title, content: content.trim() };
         }
-        if (content.trim())
-            return { url, title, content: content.trim() };
     }
-    const jsxText = pageProps ? extractJsxComponent({ props: { pageProps } }) : null;
-    let title = cleanPath;
-    const fmMatch = html.match(/frontmatter:\s*\(\)\s*=>\s*\{[^}]*title:\s*["']([^"']+)["']/);
-    if (fmMatch?.[1])
-        title = fmMatch[1];
-    const descMatch = html.match(/description:\s*["']([^"']+)["']/);
-    if (jsxText && jsxText.trim()) {
-        let content = "";
-        if (descMatch?.[1])
-            content = `${descMatch[1]}\n\n`;
-        content += jsxText;
-        return { url, title, content: content.trim().slice(0, 8000) };
+    const extracted = extractCreatorContent(html);
+    const title = extracted.title || cleanPath;
+    let content = "";
+    if (extracted.description)
+        content = `${extracted.description}\n\n`;
+    content += extracted.body;
+    if (content.trim().length < 50) {
+        content = stripHtml(html).slice(0, 4000);
     }
-    return {
-        url,
-        title,
-        content: stripHtml(html).slice(0, 4000),
-    };
+    return { url, title, content: content.trim().slice(0, 8000) };
 }
 async function searchCreatorViaForum(ctx, query, limit) {
     const data = await ctx.http.getJson(`${URLS.devforum}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
