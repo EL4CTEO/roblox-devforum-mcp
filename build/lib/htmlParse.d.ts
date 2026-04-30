@@ -9,6 +9,8 @@ export declare function findLuauSection(html: string, library: string): {
     available: readonly string[];
 };
 export declare function parseDuckDuckGoSiteResults(html: string): SearchResult[];
+export declare function extractJsxChildren(code: string): string;
+export declare function extractJsxComponent(next: Record<string, unknown>): string | null;
 export declare function extractNextData(html: string): unknown;
 export declare function flattenDocBody(body: unknown): string;
 export {};

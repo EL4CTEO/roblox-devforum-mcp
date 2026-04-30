@@ -96,6 +96,30 @@ export function parseDuckDuckGoSiteResults(html) {
     });
     return results.slice(0, 10);
 }
+export function extractJsxChildren(code) {
+    const parts = [];
+    const re = /children:\s*["']([^"']+)["']/g;
+    let m;
+    while ((m = re.exec(code)) !== null) {
+        const text = (m[1] ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").trim();
+        if (text)
+            parts.push(text);
+    }
+    return parts.join("\n");
+}
+export function extractJsxComponent(next) {
+    const props = next.props;
+    const pageProps = props?.pageProps;
+    if (!pageProps)
+        return null;
+    for (const key of Object.keys(pageProps)) {
+        const val = pageProps[key];
+        if (typeof val === "string" && val.includes("function") && val.includes("jsx")) {
+            return extractJsxChildren(val);
+        }
+    }
+    return null;
+}
 export function extractNextData(html) {
     const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/);
     if (!match || !match[1])

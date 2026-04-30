@@ -10,6 +10,27 @@ const AssetType = z.enum([
     "Animations",
     "Badges",
 ]);
+const CATEGORY_MAP = {
+    Models: "Models",
+    Audio: "Audio",
+    Meshes: "Meshes",
+    Plugins: "Plugins",
+    Decals: "Decals",
+    Animations: "Animations",
+    Badges: "Badges",
+};
+function toCatalogCategory(assetType) {
+    const map = {
+        Models: 11,
+        Audio: 13,
+        Meshes: 40,
+        Plugins: 12,
+        Decals: 4,
+        Animations: 24,
+        Badges: 21,
+    };
+    return map[assetType] ?? 11;
+}
 const inputShape = {
     query: z.string().describe("Asset name or keyword."),
     asset_type: AssetType.default("Models").describe("Asset category."),
@@ -64,7 +85,8 @@ export function register(server, ctx) {
         const input = raw;
         try {
             const norm = normalizeLimit(Math.min(input.limit, 30));
-            const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=${encodeURIComponent(input.asset_type)}&SortType=Relevance&Limit=${norm.value}&Keyword=${encodeURIComponent(input.query)}`;
+            const categoryId = toCatalogCategory(input.asset_type);
+            const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=${categoryId}&SortType=Relevance&Limit=${norm.value}&Keyword=${encodeURIComponent(input.query)}`;
             const search = await ctx.http.getJson(searchUrl);
             const ids = (search.data ?? [])
                 .filter((i) => i.itemType === "Asset")

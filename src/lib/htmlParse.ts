@@ -109,6 +109,30 @@ export function parseDuckDuckGoSiteResults(html: string): SearchResult[] {
   return results.slice(0, 10);
 }
 
+export function extractJsxChildren(code: string): string {
+  const parts: string[] = [];
+  const re = /children:\s*["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const text = (m[1] ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").trim();
+    if (text) parts.push(text);
+  }
+  return parts.join("\n");
+}
+
+export function extractJsxComponent(next: Record<string, unknown>): string | null {
+  const props = next.props as Record<string, unknown> | undefined;
+  const pageProps = props?.pageProps as Record<string, unknown> | undefined;
+  if (!pageProps) return null;
+  for (const key of Object.keys(pageProps)) {
+    const val = pageProps[key];
+    if (typeof val === "string" && val.includes("function") && val.includes("jsx")) {
+      return extractJsxChildren(val);
+    }
+  }
+  return null;
+}
+
 export function extractNextData(html: string): unknown {
   const match = html.match(
     /<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/

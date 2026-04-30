@@ -1,7 +1,7 @@
 import * as z from "zod";
 import { URLS } from "../config.js";
 import { buildSearchUserMap, toForumHit } from "../lib/discourse.js";
-import { LUAU_LIBRARY_NAMES, extractNextData, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
+import { LUAU_LIBRARY_NAMES, extractNextData, extractJsxComponent, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
 import { fail, ok } from "../lib/responses.js";
 import { stripHtml } from "../lib/sanitize.js";
 import { sortByRelevance } from "../lib/scoring.js";
@@ -50,26 +50,41 @@ async function fetchCreatorPage(ctx, path) {
             content: stripHtml(html).slice(0, 4000),
         };
     }
-    const doc = next.props?.pageProps?.doc ??
-        next.props?.pageProps?.data;
-    if (!doc) {
-        return {
-            url,
-            title: cleanPath,
-            content: stripHtml(html).slice(0, 4000),
-        };
+    const pageProps = next.props?.pageProps;
+    const doc = pageProps?.doc ??
+        pageProps?.data;
+    if (doc) {
+        const title = String(doc.title ?? doc.name ?? cleanPath);
+        let content = "";
+        if (doc.description)
+            content += `${doc.description}\n\n`;
+        if (doc.body)
+            content += flattenDocBody(doc.body);
+        else if (doc.content) {
+            const c = doc.content;
+            content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c);
+        }
+        if (content.trim())
+            return { url, title, content: content.trim() };
     }
-    const title = String(doc.title ?? doc.name ?? cleanPath);
-    let content = "";
-    if (doc.description)
-        content += `${doc.description}\n\n`;
-    if (doc.body)
-        content += flattenDocBody(doc.body);
-    else if (doc.content) {
-        const c = doc.content;
-        content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c);
+    const jsxText = pageProps ? extractJsxComponent({ props: { pageProps } }) : null;
+    let title = cleanPath;
+    const fmMatch = html.match(/frontmatter:\s*\(\)\s*=>\s*\{[^}]*title:\s*["']([^"']+)["']/);
+    if (fmMatch?.[1])
+        title = fmMatch[1];
+    const descMatch = html.match(/description:\s*["']([^"']+)["']/);
+    if (jsxText && jsxText.trim()) {
+        let content = "";
+        if (descMatch?.[1])
+            content = `${descMatch[1]}\n\n`;
+        content += jsxText;
+        return { url, title, content: content.trim().slice(0, 8000) };
     }
-    return { url, title, content: content.trim() };
+    return {
+        url,
+        title,
+        content: stripHtml(html).slice(0, 4000),
+    };
 }
 async function searchCreatorViaForum(ctx, query, limit) {
     const data = await ctx.http.getJson(`${URLS.devforum}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);
