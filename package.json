@@ -29,6 +29,7 @@
     "README.md"
   ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsc --watch",
