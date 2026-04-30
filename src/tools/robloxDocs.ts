@@ -71,8 +71,9 @@ async function fetchCreatorPage(
   ctx: AppContext,
   path: string
 ): Promise<{ url: string; title: string; content: string }> {
-  const cleanPath = path.replace(/^\/+/, "");
-  const url = `${URLS.creatorDocs}/${cleanPath}`;
+  let cleanPath = path.replace(/^\/+/, "");
+  if (!cleanPath.startsWith("docs/")) cleanPath = `docs/${cleanPath}`;
+  const url = `${URLS.creatorDocs.replace(/\/docs$/, "")}/${cleanPath}`;
   const html = await ctx.http.getHtml(url);
   const next = extractNextData(html) as {
     props?: { pageProps?: { doc?: unknown; data?: unknown } };
@@ -147,7 +148,7 @@ async function searchCommunity(
   limit: number
 ): Promise<{ title: string; url: string; author?: string; excerpt?: string }[]> {
   const data = await ctx.http.getJson<DiscourseSearchResponse>(
-    `${URLS.devforum}/search.json?q=${encodeURIComponent(`${query} category:resources category:tutorials order:latest`)}`
+    `${URLS.devforum}/search.json?q=${encodeURIComponent(`${query} #resources order:latest`)}`
   );
   const topics = sortByRelevance(data.topics ?? []);
   const userMap = buildSearchUserMap(data);

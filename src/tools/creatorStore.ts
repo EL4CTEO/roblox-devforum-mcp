@@ -30,6 +30,8 @@ const Asset = z.object({
   creator: z.string(),
   price: z.string(),
   url: z.string(),
+  description: z.string().optional(),
+  thumbnailUrl: z.string().optional(),
 });
 
 const outputShape = {
@@ -60,8 +62,10 @@ interface SearchResp {
 interface AssetDetails {
   AssetId: number;
   Name?: string;
+  Description?: string;
   Creator?: { Name?: string };
   PriceInRobux?: number | null;
+  ThumbnailUrl?: string | null;
 }
 
 function formatPrice(p: number | null | undefined): string {
@@ -125,6 +129,8 @@ export function register(server: McpServer, ctx: AppContext): void {
           creator: a.Creator?.Name ?? "unknown",
           price: formatPrice(a.PriceInRobux),
           url: `https://www.roblox.com/library/${a.AssetId}`,
+          description: a.Description ?? undefined,
+          thumbnailUrl: a.ThumbnailUrl ?? undefined,
         }));
 
         if (results.length === 0) {
@@ -138,7 +144,7 @@ export function register(server: McpServer, ctx: AppContext): void {
         const text = results
           .map(
             (r) =>
-              `• ${r.name}\n  ID: ${r.id} | Creator: ${r.creator} | Price: ${r.price}\n  ${r.url}`
+              `• ${r.name}${r.description ? `\n  ${r.description.slice(0, 120)}` : ""}\n  ID: ${r.id} | Creator: ${r.creator} | Price: ${r.price}${r.thumbnailUrl ? `\n  ${r.thumbnailUrl}` : ""}\n  ${r.url}`
           )
           .join("\n\n");
         const structured: Record<string, unknown> = {

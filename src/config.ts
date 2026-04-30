@@ -4,7 +4,7 @@ export const VERSION = "5.0.0";
 
 export const URLS = {
   devforum: "https://devforum.roblox.com",
-  creatorDocs: "https://create.roblox.com",
+  creatorDocs: "https://create.roblox.com/docs",
   robloxStatus: "https://status.roblox.com",
   creatorStore: "https://catalog.roblox.com",
   searchEngine: "https://duckduckgo.com/html",

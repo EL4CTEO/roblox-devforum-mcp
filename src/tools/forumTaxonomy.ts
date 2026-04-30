@@ -147,10 +147,49 @@ export function register(server: McpServer, ctx: AppContext): void {
         if (input.category_id === undefined) {
           return fail(new Error("category_id is required when kind='category_meta'"));
         }
-        const data = await ctx.http.getJson<{
+        const id = input.category_id;
+        let categoryData: {
           category: CategoryRaw;
-          subcategory_list?: { categories: CategoryRaw[] };
-        }>(`${URLS.devforum}/c/${input.category_id}/show.json`);
+          subcategory_list?: { categories: CategoryRaw[] } | undefined;
+        } | null = null;
+
+        const endpoints = [`${URLS.devforum}/c/${id}/show.json`, `${URLS.devforum}/c/${id}.json`];
+
+        for (const url of endpoints) {
+          try {
+            const raw = await ctx.http.getJson<
+              | CategoryRaw
+              | {
+                  category: CategoryRaw;
+                  subcategory_list?: { categories: CategoryRaw[] };
+                  topic_list?: { topics: unknown[] };
+                }
+            >(url);
+            if (!raw) continue;
+
+            const cat = (raw as { category?: CategoryRaw }).category ?? (raw as CategoryRaw);
+            if (cat && typeof cat.id === "number" && typeof cat.name === "string") {
+              categoryData = {
+                category: cat as CategoryRaw,
+                subcategory_list: (raw as { subcategory_list?: { categories: CategoryRaw[] } })
+                  .subcategory_list,
+              };
+              break;
+            }
+          } catch {
+            // try next endpoint
+          }
+        }
+
+        if (!categoryData?.category) {
+          return fail(
+            new Error(
+              `Category ${id} not found. Try listing categories first with kind='categories' to find valid IDs.`
+            )
+          );
+        }
+
+        const data = categoryData;
         const c = data.category;
         let subs = data.subcategory_list?.categories ?? [];
         let topicCount = c.topic_count ?? 0;

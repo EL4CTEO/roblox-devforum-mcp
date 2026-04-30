@@ -23,6 +23,7 @@ export function parseStatusPage(html: string): StatusPage {
   const $ = cheerio.load(html);
   const components: StatusComponent[] = [];
   const incidents: StatusIncident[] = [];
+  const seen = new Set<string>();
 
   $(".component-container").each((_, el) => {
     const $el = $(el);
@@ -30,13 +31,17 @@ export function parseStatusPage(html: string): StatusPage {
     topName.find("i").remove();
     const name = topName.text().trim();
     const status = $el.find(".component-status").first().text().trim();
-    if (name && status) components.push({ name, status });
+    if (name && status && !seen.has(name)) {
+      seen.add(name);
+      components.push({ name, status });
+    }
 
     $el.find(".child-components-container .component-inner-container").each((_i, sub) => {
       const $sub = $(sub);
       const subName = $sub.find(".container_name").first().text().trim();
       const subStatus = $sub.find(".pull-right").first().text().trim();
-      if (subName && subStatus) {
+      if (subName && subStatus && !seen.has(subName)) {
+        seen.add(subName);
         components.push({ name: subName, status: subStatus });
       }
     });

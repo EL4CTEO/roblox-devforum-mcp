@@ -180,10 +180,11 @@ export function register(server: McpServer, ctx: AppContext): void {
           for (const p of posts.slice(0, input.limit)) {
             const topicId = Number(p.topic_id ?? 0);
             if (!topicId) continue;
-            const slug = String(p.slug ?? topicId);
+            const slug = String(p.slug ?? p.topic_slug ?? topicId);
+            const title = String(p.topic_title ?? p.title ?? p.topic_title ?? `Topic #${topicId}`);
             hits.push({
               id: topicId,
-              title: String(p.topic_title ?? p.title ?? `Topic #${topicId}`),
+              title,
               url: `${URLS.devforum}/t/${slug}/${topicId}`,
               author: String(p.username ?? input.user ?? "unknown"),
               tags: [],
@@ -204,7 +205,7 @@ export function register(server: McpServer, ctx: AppContext): void {
           });
         }
 
-        if (input.sort === "relevance" || input.sort === "latest") {
+        if (input.sort === "latest") {
           topics = sortByRelevance(topics);
         }
         const limited = topics.slice(0, input.limit);
