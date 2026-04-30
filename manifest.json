@@ -1,0 +1,33 @@
+{
+  "manifest_version": "0.3",
+  "name": "roblox-devforum",
+  "display_name": "Roblox DevForum MCP",
+  "version": "5.1.1",
+  "description": "Full Roblox developer context for AI agents — DevForum search, API reference, Creator Hub docs, Luau stdlib, Creator Store, and platform status. 7 tools, 8 resources, 4 prompts.",
+  "long_description": "MCP server that gives AI agents complete context on the Roblox developer ecosystem.\n\n**7 tools:**\n- `forum_search` — Search DevForum with filters (solved, bugs, category, tag, period, sort, user)\n- `forum_thread` — Read threads, accepted answers, and paginated replies\n- `forum_taxonomy` — Browse categories, tags, category metadata\n- `roblox_api` — Live Full-API-Dump: classes, members, enums, hierarchy\n- `roblox_docs` — Creator Hub guides, Luau stdlib, community tutorials\n- `platform_status` — Roblox service health and active incidents\n- `creator_store` — Search the catalog (models, audio, plugins, meshes, decals, animations, badges)\n\n**8 resource URIs** with completions for class/enum names.\n**4 prompts** for guided workflows: research, debugging, implementation patterns, deprecation audits.\n\nNo API keys required.",
+  "author": {
+    "name": "EL4CTEO"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EL4CTEO/roblox-devforum-mcp"
+  },
+  "icon": "icon.png",
+  "keywords": ["roblox", "devforum", "api", "luau", "creator-store", "game-development"],
+  "license": "UNLICENSED",
+  "server": {
+    "type": "node",
+    "entry_point": "build/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/build/index.js"]
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

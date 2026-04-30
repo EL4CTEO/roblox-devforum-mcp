@@ -2,20 +2,25 @@
 
 MCP server for the Roblox developer ecosystem — DevForum, API reference, Creator Hub docs, Luau stdlib, Creator Store, platform status. **7 tools, 8 resources, 4 prompts.** No API keys needed.
 
-## Install for Claude Desktop
+## Install — one click (Claude Desktop)
 
-### 1. Open settings
+### 1. Download the bundle
 
-Claude Desktop → **File** → **Settings** (or `Ctrl+,`)
+Get the latest `.mcpb` file from [Releases](https://github.com/EL4CTEO/roblox-devforum-mcp/releases).
 
-### 2. Go to Developer tab
+### 2. Install in Claude Desktop
 
-Click **Developer** in the left sidebar, then **Edit Config**.
+Claude Desktop → **Settings** → **Extensions** → **Install Extension** → select the `.mcpb` file.
 
-### 3. Paste the config
+Done. The 7 tools appear immediately at the next conversation.
 
-Replace the file contents with:
+---
 
+## Install — npx (Claude Desktop / opencode / Claude Code)
+
+No download needed. Paste into your MCP client config:
+
+**Claude Desktop** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
@@ -27,39 +32,7 @@ Replace the file contents with:
 }
 ```
 
-### 4. Restart Claude Desktop
-
-Quit and reopen. First launch downloads and builds (~30s). The hammer icon <img src="https://mintcdn.com/mcp/2BMHnlNW5OqOohXZ/images/claude-desktop-mcp-slider.svg" style="height:1.2em;vertical-align:middle" /> appears in the chat input when ready.
-
----
-
-### Windows
-
-If `npx` times out, clone locally instead:
-
-```bash
-git clone https://github.com/EL4CTEO/roblox-devforum-mcp.git
-cd roblox-devforum-mcp
-npm install && npm run build
-```
-
-Then use the local path in step 3:
-
-```json
-{
-  "mcpServers": {
-    "roblox-devforum": {
-      "command": "node",
-      "args": ["C:/Users/YOU/roblox-devforum-mcp/build/index.js"]
-    }
-  }
-}
-```
-
-## Install for opencode
-
-Add to `opencode.json`:
-
+**opencode** (`opencode.json`):
 ```json
 {
   "mcp": {
@@ -71,25 +44,32 @@ Add to `opencode.json`:
 }
 ```
 
-## Install for Claude Code
-
+**Claude Code** (terminal):
 ```bash
 claude mcp add roblox-devforum -- npx -y github:EL4CTEO/roblox-devforum-mcp
 ```
 
-## Install as Cloudflare Worker
+First launch takes ~30s to download and build. Subsequent launches are instant.
 
-Use on desktop, web, and mobile via claude.ai Connectors.
+### Windows
+
+If `npx` times out, clone locally:
 
 ```bash
-npx wrangler login
-npm run worker:secret          # set AUTH_TOKEN
-npm run worker:deploy          # prints your Worker URL
+git clone https://github.com/EL4CTEO/roblox-devforum-mcp.git
+cd roblox-devforum-mcp
+npm install && npm run build
 ```
 
-In claude.ai → Settings → Connectors → **Add custom connector**:
-- URL: `https://roblox-devforum-mcp.YOURNAME.workers.dev/mcp`
-- Header: `Authorization: Bearer YOUR_AUTH_TOKEN`
+Then use `"command": "node"` with `"args": ["C:/path/to/roblox-devforum-mcp/build/index.js"]`.
+
+## Install — Cloudflare Worker
+
+```bash
+npm run worker:secret && npm run worker:deploy
+```
+
+claude.ai → Settings → Connectors → Add custom connector → URL: `https://...workers.dev/mcp`, Header: `Authorization: Bearer YOUR_TOKEN`
 
 ## Tools
 
@@ -123,6 +103,15 @@ Every tool returns both readable markdown and a structured JSON payload.
 - **`explain-error`** — debug pipeline using solved DevForum evidence
 - **`find-implementation-pattern`** — docs + tutorials + proven patterns
 - **`audit-deprecated-api`** — deprecation status + migration guides
+
+## Building the .mcpb bundle
+
+```bash
+npm run build
+npx @anthropic-ai/mcpb pack
+```
+
+This creates `roblox-devforum-mcp-5.1.1.mcpb` — the file users install with one click.
 
 ## Local development
 
