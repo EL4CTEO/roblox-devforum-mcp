@@ -1,0 +1,10 @@
+import type { DiscourseSearchResponse, DiscourseTopic, DiscourseUser, ForumSearchHit } from "../types.js";
+export declare function buildUserMap(users: DiscourseUser[] | undefined): Map<number, string>;
+export declare function buildSearchUserMap(data: DiscourseSearchResponse): Map<number, string>;
+export declare function topicAuthor(t: DiscourseTopic, users: Map<number, string>): string;
+export declare function topicUrl(t: DiscourseTopic): string;
+export declare function topicTitle(t: DiscourseTopic): string;
+export declare function topicReplyCount(t: DiscourseTopic): number;
+export declare function topicLine(t: DiscourseTopic, users?: Map<number, string>): string;
+export declare function formatTopics(topics: DiscourseTopic[], users: DiscourseUser[] | undefined, limit: number): string;
+export declare function toForumHit(t: DiscourseTopic, users: Map<number, string>): ForumSearchHit;

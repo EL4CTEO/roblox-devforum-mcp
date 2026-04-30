@@ -1,0 +1,55 @@
+import * as z from "zod";
+export declare const VERSION = "5.1.0";
+export declare const URLS: {
+    readonly devforum: "https://devforum.roblox.com";
+    readonly creatorDocs: "https://create.roblox.com/docs";
+    readonly robloxStatus: "https://status.roblox.com";
+    readonly creatorStore: "https://catalog.roblox.com";
+    readonly searchEngine: "https://duckduckgo.com/html";
+    readonly apiDump: "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json";
+    readonly luauLang: "https://luau-lang.org";
+};
+export declare const COMMON_HEADERS: Record<string, string>;
+declare const EnvSchema: z.ZodObject<{
+    RDFM_LOG_LEVEL: z.ZodDefault<z.ZodEnum<["debug", "info", "notice", "warning", "error"]>>;
+    RDFM_FETCH_TIMEOUT_MS: z.ZodDefault<z.ZodNumber>;
+    RDFM_CACHE_TTL_MS: z.ZodDefault<z.ZodNumber>;
+    RDFM_CACHE_MAX: z.ZodDefault<z.ZodNumber>;
+    RDFM_API_DUMP_TTL_MS: z.ZodDefault<z.ZodNumber>;
+    RDFM_MAX_RETRIES: z.ZodDefault<z.ZodNumber>;
+    RDFM_BASE_BACKOFF_MS: z.ZodDefault<z.ZodNumber>;
+    RDFM_USER_AGENT: z.ZodDefault<z.ZodString>;
+    RDFM_CIRCUIT_THRESHOLD: z.ZodDefault<z.ZodNumber>;
+    RDFM_CIRCUIT_WINDOW_MS: z.ZodDefault<z.ZodNumber>;
+    RDFM_CIRCUIT_COOLDOWN_MS: z.ZodDefault<z.ZodNumber>;
+}, "strip", z.ZodTypeAny, {
+    RDFM_LOG_LEVEL: "debug" | "info" | "notice" | "warning" | "error";
+    RDFM_FETCH_TIMEOUT_MS: number;
+    RDFM_CACHE_TTL_MS: number;
+    RDFM_CACHE_MAX: number;
+    RDFM_API_DUMP_TTL_MS: number;
+    RDFM_MAX_RETRIES: number;
+    RDFM_BASE_BACKOFF_MS: number;
+    RDFM_USER_AGENT: string;
+    RDFM_CIRCUIT_THRESHOLD: number;
+    RDFM_CIRCUIT_WINDOW_MS: number;
+    RDFM_CIRCUIT_COOLDOWN_MS: number;
+}, {
+    RDFM_LOG_LEVEL?: "debug" | "info" | "notice" | "warning" | "error" | undefined;
+    RDFM_FETCH_TIMEOUT_MS?: number | undefined;
+    RDFM_CACHE_TTL_MS?: number | undefined;
+    RDFM_CACHE_MAX?: number | undefined;
+    RDFM_API_DUMP_TTL_MS?: number | undefined;
+    RDFM_MAX_RETRIES?: number | undefined;
+    RDFM_BASE_BACKOFF_MS?: number | undefined;
+    RDFM_USER_AGENT?: string | undefined;
+    RDFM_CIRCUIT_THRESHOLD?: number | undefined;
+    RDFM_CIRCUIT_WINDOW_MS?: number | undefined;
+    RDFM_CIRCUIT_COOLDOWN_MS?: number | undefined;
+}>;
+export type Config = z.infer<typeof EnvSchema>;
+export type EnvLike = Record<string, unknown>;
+export declare function loadConfig(env?: EnvLike): Config;
+export declare const SERVER_NAME = "roblox-devforum-mcp";
+export declare const CATEGORY_WEIGHTS: Record<number, number>;
+export {};
