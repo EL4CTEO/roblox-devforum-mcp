@@ -182,6 +182,20 @@ export function register(server: McpServer, ctx: AppContext): void {
         }
 
         if (!categoryData?.category) {
+          try {
+            const site = await ctx.http.getJson<{ categories: CategoryRaw[] }>(
+              `${URLS.devforum}/site.json`
+            );
+            const found = site.categories.find((c) => c.id === id);
+            if (found) {
+              categoryData = { category: found };
+            }
+          } catch {
+            // optional fallback
+          }
+        }
+
+        if (!categoryData?.category) {
           return fail(
             new Error(
               `Category ${id} not found. Try listing categories first with kind='categories' to find valid IDs.`

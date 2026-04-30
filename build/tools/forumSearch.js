@@ -105,10 +105,12 @@ export function register(server, ctx) {
             let isSearch = false;
             if (input.sort === "top") {
                 const period = input.period ?? "weekly";
-                url = `${URLS.devforum}/top/${period}.json`;
                 if (input.category) {
                     const cs = encodeURIComponent(input.category);
                     url = `${URLS.devforum}/c/${cs}/l/top/${period}.json`;
+                }
+                else {
+                    url = `${URLS.devforum}/top.json?period=${period}`;
                 }
             }
             else if (input.sort === "new" || input.sort === "created") {
