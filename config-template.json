@@ -1,8 +1,18 @@
 {
   "$comment": "Copy the relevant block into your MCP client config.",
-  "$comment2": "Replace /path/to/ with your actual clone path.",
 
   "claude-desktop": {
+    "$comment": "Primary method — no clone required. First launch downloads + builds (~30s), then instant.",
+    "mcpServers": {
+      "roblox-devforum": {
+        "command": "npx",
+        "args": ["-y", "github:EL4CTEO/roblox-devforum-mcp"]
+      }
+    }
+  },
+
+  "claude-desktop-local": {
+    "$comment": "Fallback: clone repo then use local path. Required on Windows if npx times out.",
     "mcpServers": {
       "roblox-devforum": {
         "command": "node",
@@ -15,29 +25,28 @@
     "mcp": {
       "roblox-devforum": {
         "type": "local",
-        "command": ["node", "/path/to/roblox-devforum-mcp/build/index.js"]
+        "command": ["npx", "-y", "github:EL4CTEO/roblox-devforum-mcp"]
       }
     }
   },
 
-  "windows": {
-    "opencode": {
-      "mcp": {
-        "roblox-devforum": {
-          "type": "local",
-          "command": ["cmd.exe", "/c", "node", "C:\\path\\to\\roblox-devforum-mcp\\build\\index.js"]
-        }
+  "opencode-local": {
+    "$comment": "Fallback for Windows or if npx is slow.",
+    "mcp": {
+      "roblox-devforum": {
+        "type": "local",
+        "command": ["node", "/path/to/roblox-devforum-mcp/build/index.js"]
       }
     }
   },
 
   "claude-code": {
     "$comment": "Run in terminal:",
-    "$command": "claude mcp add roblox-devforum -- node /path/to/roblox-devforum-mcp/build/index.js"
+    "$command": "claude mcp add roblox-devforum -- npx -y github:EL4CTEO/roblox-devforum-mcp"
   },
 
   "cloudflare-worker": {
-    "$comment": "Deploy once, then add as Connector in claude.ai Settings.",
+    "$comment": "Deploy once, use on desktop/web/mobile via claude.ai Connectors.",
     "$setup": [
       "npx wrangler login",
       "npm run worker:secret",

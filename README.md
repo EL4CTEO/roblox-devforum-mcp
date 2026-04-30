@@ -4,16 +4,7 @@ MCP server that gives AI agents full context on the Roblox developer ecosystem �
 
 ## Quick start
 
-```bash
-git clone https://github.com/EL4CTEO/roblox-devforum-mcp.git
-cd roblox-devforum-mcp
-npm install
-npm run build
-```
-
-## Configuration
-
-Pick your client — copy the block into your config file.
+No clone required. For most users, just paste a block into your MCP client config.
 
 ### Claude Desktop
 
@@ -23,12 +14,14 @@ Pick your client — copy the block into your config file.
 {
   "mcpServers": {
     "roblox-devforum": {
-      "command": "node",
-      "args": ["C:/Users/YOU/roblox-devforum-mcp/build/index.js"]
+      "command": "npx",
+      "args": ["-y", "github:EL4CTEO/roblox-devforum-mcp"]
     }
   }
 }
 ```
+
+First launch takes ~30s to download and build. Subsequent launches are instant.
 
 ### opencode
 
@@ -39,25 +32,44 @@ Pick your client — copy the block into your config file.
   "mcp": {
     "roblox-devforum": {
       "type": "local",
-      "command": ["node", "C:/Users/YOU/roblox-devforum-mcp/build/index.js"]
+      "command": ["npx", "-y", "github:EL4CTEO/roblox-devforum-mcp"]
     }
   }
 }
 ```
 
-Windows note: use `cmd.exe /c` wrapper if Windows does not recognise `node` directly (uncomment the `"windows"` variant in `config-template.json`).
+### Windows
+
+If `npx` times out on first launch, clone locally instead:
+
+```bash
+git clone https://github.com/EL4CTEO/roblox-devforum-mcp.git
+cd roblox-devforum-mcp
+npm install && npm run build
+```
+
+Then use the local path in your config:
+
+```json
+{
+  "mcpServers": {
+    "roblox-devforum": {
+      "command": "node",
+      "args": ["C:/path/to/roblox-devforum-mcp/build/index.js"]
+    }
+  }
+}
+```
 
 ### Cloudflare Worker (desktop / web / mobile)
 
-Deploy once, use everywhere. Same tools available via your own Worker URL.
-
 ```bash
 npx wrangler login
-npm run worker:secret              # set AUTH_TOKEN
-npm run worker:deploy              # prints your Worker URL
+npm run worker:secret
+npm run worker:deploy
 ```
 
-Then in claude.ai → Settings → Connectors → Add custom connector:
+claude.ai → Settings → Connectors → Add custom connector:
 - URL: `https://roblox-devforum-mcp.YOURNAME.workers.dev/mcp`
 - Header: `Authorization: Bearer YOUR_AUTH_TOKEN`
 
@@ -65,7 +77,7 @@ Then in claude.ai → Settings → Connectors → Add custom connector:
 
 | Tool | Use when |
 |------|----------|
-| `forum_search` | Find DevForum threads — solved, bugs, announcements, or anything with filters |
+| `forum_search` | Find DevForum threads with filters (solved, bugs, category, tag, period, sort, user) |
 | `forum_thread` | Read a thread, its accepted answer, and replies |
 | `forum_taxonomy` | Browse categories, tags, or get a category's metadata |
 | `roblox_api` | Look up any class, member, enum, or inheritance chain from the live API dump |
@@ -73,11 +85,9 @@ Then in claude.ai → Settings → Connectors → Add custom connector:
 | `platform_status` | Check if Roblox services are operational |
 | `creator_store` | Search models, audio, plugins, meshes, decals, animations, badges |
 
-Every tool returns both readable markdown and a structured JSON payload that agents can consume directly.
+Every tool returns both readable markdown and a structured JSON payload.
 
 ## Resources
-
-Stable URIs for dereferencing or caching:
 
 | URI | Returns |
 |-----|---------|
@@ -91,21 +101,26 @@ Stable URIs for dereferencing or caching:
 
 ## Prompts
 
-Pre-built workflows agents can invoke:
-
 - **`research-feature`** — class lookup → solved threads → known bugs → guides
 - **`explain-error`** — debug pipeline using solved DevForum evidence
 - **`find-implementation-pattern`** — docs + tutorials + proven patterns
-- **`audit-deprecated-api`** — deprecation status + migration guides + announcements
+- **`audit-deprecated-api`** — deprecation status + migration guides
 
-## Engineering
+## Local development
 
-- **Cache**: LRU with ETag (If-None-Match → 304 handling), stale-while-revalidate
-- **HTTP**: exponential backoff + jitter, retries, per-host circuit breaker
-- **API dump**: auto-refreshed (24h TTL), inflight dedup, stale fallback
-- **Logging**: MCP protocol (`notifications/message`), respects client log level
-- **Type safety**: strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`
-- **Tests**: vitest (45 tests), CI on Node 20/22, Biome lint + format
+```bash
+git clone https://github.com/EL4CTEO/roblox-devforum-mcp.git
+cd roblox-devforum-mcp
+npm install
+npm run build
+```
+
+```bash
+npm run typecheck    # tsc --noEmit
+npm run test         # vitest (45 tests)
+npm run check        # lint + typecheck + test
+npm run build        # tsc → build/
+```
 
 ## Environment variables
 
@@ -117,8 +132,6 @@ All optional. Set via MCP client `env` field (stdio) or Wrangler secrets/vars (W
 | `RDFM_LOG_LEVEL` | `info` | `debug` / `info` / `warning` / `error` |
 | `RDFM_FETCH_TIMEOUT_MS` | `15000` | Request timeout |
 | `RDFM_CACHE_TTL_MS` | `300000` | Cache TTL (5 min) |
-| `RDFM_CACHE_MAX` | `200` | Cache entries |
-| `RDFM_API_DUMP_TTL_MS` | `86400000` | API dump refresh (24 h) |
 
 ## Requirements
 
