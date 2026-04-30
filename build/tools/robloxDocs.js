@@ -1,7 +1,7 @@
 import * as z from "zod";
 import { URLS } from "../config.js";
 import { buildSearchUserMap, toForumHit } from "../lib/discourse.js";
-import { LUAU_LIBRARY_NAMES, extractNextData, extractCreatorContent, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
+import { LUAU_LIBRARY_NAMES, extractNextData, findLuauSection, flattenDocBody, parseDuckDuckGoSiteResults, } from "../lib/htmlParse.js";
 import { fail, ok } from "../lib/responses.js";
 import { stripHtml } from "../lib/sanitize.js";
 import { sortByRelevance } from "../lib/scoring.js";
@@ -36,6 +36,17 @@ const outputShape = {
     }))
         .optional(),
 };
+function extractJsxText(code) {
+    const parts = [];
+    const re = /children:(?:\[)?\s*["']([^"']*)["']/g;
+    let m;
+    while ((m = re.exec(code)) !== null) {
+        const text = (m[1] ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').trim();
+        if (text && text.length > 1)
+            parts.push(text);
+    }
+    return parts.join("\n");
+}
 async function fetchCreatorPage(ctx, path) {
     let cleanPath = path.replace(/^\/+/, "");
     if (!cleanPath.startsWith("docs/"))
@@ -52,26 +63,32 @@ async function fetchCreatorPage(ctx, path) {
             let content = "";
             if (doc.description)
                 content += `${doc.description}\n\n`;
-            if (doc.body)
+            if (doc.body) {
                 content += flattenDocBody(doc.body);
+            }
             else if (doc.content) {
                 const c = doc.content;
-                content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c);
+                if (typeof c === "string") {
+                    if (c.startsWith("var Component=") || c.includes("_jsx_runtime")) {
+                        content += extractJsxText(c);
+                    }
+                    else {
+                        content += stripHtml(c);
+                    }
+                }
+                else {
+                    content += flattenDocBody(c);
+                }
             }
             if (content.trim())
-                return { url, title, content: content.trim() };
+                return { url, title, content: content.trim().slice(0, 8000) };
         }
     }
-    const extracted = extractCreatorContent(html);
-    const title = extracted.title || cleanPath;
-    let content = "";
-    if (extracted.description)
-        content = `${extracted.description}\n\n`;
-    content += extracted.body;
-    if (content.trim().length < 50) {
-        content = stripHtml(html).slice(0, 4000);
-    }
-    return { url, title, content: content.trim().slice(0, 8000) };
+    return {
+        url,
+        title: cleanPath,
+        content: stripHtml(html).slice(0, 4000),
+    };
 }
 async function searchCreatorViaForum(ctx, query, limit) {
     const data = await ctx.http.getJson(`${URLS.devforum}/search.json?q=${encodeURIComponent(`${query} category:resources order:latest`)}`);

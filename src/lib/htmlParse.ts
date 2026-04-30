@@ -121,38 +121,6 @@ export function extractNextData(html: string): unknown {
   }
 }
 
-export function extractCreatorContent(html: string): { title: string; description: string; body: string } {
-  const $ = cheerio.load(html);
-  let title = "";
-  let description = "";
-  const titleEl = $("title").first();
-  if (titleEl.length) title = titleEl.text().trim();
-  const metaDesc = $('meta[name="description"]').first();
-  if (metaDesc.length) description = metaDesc.attr("content") ?? "";
-  const article = $("article").first();
-  const container = article.length ? article : $("main").first();
-  const root = container.length ? container : $("body");
-  const elements = root.find("h1, h2, h3, h4, p, li, pre, code, td, th, strong");
-  const parts: string[] = [];
-  elements.each((_, el) => {
-    const $el = $(el);
-    const tag = $el.prop("tagName")?.toLowerCase() ?? "";
-    const text = $el.text().trim();
-    if (!text) return;
-    if (tag.match(/^h[1-4]$/)) {
-      const level = parseInt(tag[1] ?? "1");
-      parts.push("\n" + "#".repeat(level) + " " + text + "\n");
-    } else if (tag === "pre" || tag === "code") {
-      parts.push("\n```\n" + text + "\n```\n");
-    } else if (tag === "li") {
-      parts.push("- " + text);
-    } else {
-      parts.push(text);
-    }
-  });
-  return { title, description, body: parts.join("\n\n") };
-}
-
 export function flattenDocBody(body: unknown): string {
   if (!Array.isArray(body)) return "";
   return body

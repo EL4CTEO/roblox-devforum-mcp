@@ -24,16 +24,6 @@ const ASSET_TYPE_IDS: Record<string, number> = {
   Badges: 21,
 };
 
-const CATEGORIES_WITH_FILTER: Record<string, number> = {
-  Models: 11,
-  Plugins: 12,
-  Audio: 13,
-  Meshes: 40,
-  Decals: 4,
-  Animations: 24,
-  Badges: 21,
-};
-
 const inputShape = {
   query: z.string().describe("Asset name or keyword."),
   asset_type: AssetType.default("Models").describe("Asset category."),
@@ -116,15 +106,15 @@ export function register(server: McpServer, ctx: AppContext): void {
       try {
         const norm = normalizeLimit(Math.min(input.limit, 30));
         const assetTypeId = ASSET_TYPE_IDS[input.asset_type];
-        const categoryId = CATEGORIES_WITH_FILTER[input.asset_type];
-        const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=${categoryId ?? 11}&SortType=Relevance&Limit=${norm.value}&Keyword=${encodeURIComponent(input.query)}`;
+        const mustFilter = assetTypeId !== 10;
+        const searchLimit = mustFilter ? 30 : norm.value;
+        const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=11&SortType=Relevance&Limit=${searchLimit}&Keyword=${encodeURIComponent(input.query)}`;
         const search = await ctx.http.getJson<SearchResp>(searchUrl);
         const allItems = search.data ?? [];
         const ids = allItems
           .filter((i) => i.itemType === "Asset")
           .map((i) => i.id);
 
-        const mustFilter = assetTypeId !== 10;
         const needDetails = input.include_details || mustFilter;
         let assets: AssetDetails[] = [];
         if (needDetails && ids.length > 0) {

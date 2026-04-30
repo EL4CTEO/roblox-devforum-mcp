@@ -6,7 +6,6 @@ import { buildSearchUserMap, toForumHit } from "../lib/discourse.js";
 import {
   LUAU_LIBRARY_NAMES,
   extractNextData,
-  extractCreatorContent,
   findLuauSection,
   flattenDocBody,
   parseDuckDuckGoSiteResults,
@@ -68,6 +67,17 @@ interface Input {
   limit: number;
 }
 
+function extractJsxText(code: string): string {
+  const parts: string[] = [];
+  const re = /children:(?:\[)?\s*["']([^"']*)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const text = (m[1] ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').trim();
+    if (text && text.length > 1) parts.push(text);
+  }
+  return parts.join("\n");
+}
+
 async function fetchCreatorPage(
   ctx: AppContext,
   path: string
@@ -88,23 +98,28 @@ async function fetchCreatorPage(
       const title = String(doc.title ?? doc.name ?? cleanPath);
       let content = "";
       if (doc.description) content += `${doc.description}\n\n`;
-      if (doc.body) content += flattenDocBody(doc.body);
-      else if (doc.content) {
+      if (doc.body) {
+        content += flattenDocBody(doc.body);
+      } else if (doc.content) {
         const c = doc.content;
-        content += typeof c === "string" ? stripHtml(c) : flattenDocBody(c as unknown[]);
+        if (typeof c === "string") {
+          if (c.startsWith("var Component=") || c.includes("_jsx_runtime")) {
+            content += extractJsxText(c);
+          } else {
+            content += stripHtml(c);
+          }
+        } else {
+          content += flattenDocBody(c as unknown[]);
+        }
       }
-      if (content.trim()) return { url, title, content: content.trim() };
+      if (content.trim()) return { url, title, content: content.trim().slice(0, 8000) };
     }
   }
-  const extracted = extractCreatorContent(html);
-  const title = extracted.title || cleanPath;
-  let content = "";
-  if (extracted.description) content = `${extracted.description}\n\n`;
-  content += extracted.body;
-  if (content.trim().length < 50) {
-    content = stripHtml(html).slice(0, 4000);
-  }
-  return { url, title, content: content.trim().slice(0, 8000) };
+  return {
+    url,
+    title: cleanPath,
+    content: stripHtml(html).slice(0, 4000),
+  };
 }
 
 async function searchCreatorViaForum(

@@ -10,10 +10,5 @@ export declare function findLuauSection(html: string, library: string): {
 };
 export declare function parseDuckDuckGoSiteResults(html: string): SearchResult[];
 export declare function extractNextData(html: string): unknown;
-export declare function extractCreatorContent(html: string): {
-    title: string;
-    description: string;
-    body: string;
-};
 export declare function flattenDocBody(body: unknown): string;
 export {};
