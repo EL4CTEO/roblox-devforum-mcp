@@ -75,8 +75,8 @@ export function register(server, ctx) {
             const norm = normalizeLimit(Math.min(input.limit, 30));
             const assetTypeId = ASSET_TYPE_IDS[input.asset_type];
             const mustFilter = assetTypeId !== 10;
-            const searchLimit = mustFilter ? 30 : norm.value;
-            const searchUrl = `${URLS.creatorStore}/v1/search/items?Category=11&SortType=Relevance&Limit=${searchLimit}&Keyword=${encodeURIComponent(input.query)}`;
+            const searchLimit = mustFilter ? 50 : norm.value;
+            const searchUrl = `${URLS.creatorStore}/v1/search/items?SortType=Relevance&Limit=${searchLimit}&Keyword=${encodeURIComponent(input.query)}`;
             const search = await ctx.http.getJson(searchUrl);
             const allItems = search.data ?? [];
             const ids = allItems
