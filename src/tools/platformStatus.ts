@@ -58,10 +58,15 @@ export function register(server: McpServer, ctx: AppContext): void {
           for (const n of names) text += `- ${n}\n`;
           text += "\n";
         }
-        if (input.verbose && data.incidents.length > 0) {
-          text += "### Active Incidents\n";
-          for (const inc of data.incidents) {
-            text += `- **${inc.name}**: ${inc.status}\n`;
+        if (input.verbose) {
+          text += `### Details\nFetched at: ${new Date().toISOString()}\nTotal components: ${data.components.length}\n`;
+          if (data.incidents.length > 0) {
+            text += "Active Incidents:\n";
+            for (const inc of data.incidents) {
+              text += `- **${inc.name}**: ${inc.status}\n`;
+            }
+          } else {
+            text += "No active incidents.\n";
           }
         }
 

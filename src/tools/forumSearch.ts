@@ -177,11 +177,17 @@ export function register(server: McpServer, ctx: AppContext): void {
           // user activity feed: array of posts
           const posts = data as Array<Record<string, unknown>>;
           const hits: ForumSearchHit[] = [];
-          for (const p of posts.slice(0, input.limit)) {
+          const topicIds = new Set<number>();
+          for (const p of posts) {
             const topicId = Number(p.topic_id ?? 0);
             if (!topicId) continue;
+            if (hits.length >= input.limit) break;
+            if (topicIds.has(topicId)) continue;
+            topicIds.add(topicId);
             const slug = String(p.slug ?? p.topic_slug ?? topicId);
-            const title = String(p.topic_title ?? p.title ?? p.topic_title ?? `Topic #${topicId}`);
+            let title = String(p.topic_title ?? p.title ?? "");
+            if (!title) title = slug.replace(/-/g, " ").replace(/^\d+\s*/, "");
+            if (!title) title = `Topic #${topicId}`;
             hits.push({
               id: topicId,
               title,

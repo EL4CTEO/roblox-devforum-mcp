@@ -237,9 +237,9 @@ export function register(server: McpServer, ctx: AppContext): void {
         if (input.source === "creator" || input.source === "auto") {
           const fromForum = await searchCreatorViaForum(ctx, input.query, input.limit);
           results.push(...fromForum);
-          if (results.length === 0) {
-            const ddg = await searchCreatorViaDuckDuckGo(ctx, input.query, input.limit);
-            results.push(...ddg);
+          const ddg = await searchCreatorViaDuckDuckGo(ctx, input.query, input.limit);
+          for (const r of ddg) {
+            if (!results.some((x) => x.url === r.url)) results.push(r);
           }
         }
 

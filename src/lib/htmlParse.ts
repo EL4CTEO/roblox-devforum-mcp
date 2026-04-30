@@ -52,7 +52,10 @@ export function parseStatusPage(html: string): StatusPage {
     for (const m of html.matchAll(subRe)) {
       const name = (m[1] ?? "").trim();
       const status = (m[2] ?? "").trim();
-      if (name && status) components.push({ name, status });
+      if (name && status && !seen.has(name)) {
+        seen.add(name);
+        components.push({ name, status });
+      }
     }
   }
 
