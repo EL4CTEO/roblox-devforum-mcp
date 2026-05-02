@@ -1,10 +1,14 @@
 import * as z from "zod";
 
-export const VERSION = "5.1.1";
+export const VERSION = "5.2.0";
 
 export const URLS = {
   devforum: "https://devforum.roblox.com",
   creatorDocs: "https://create.roblox.com/docs",
+  releaseNotesIndex: "https://create.roblox.com/docs/release-notes",
+  releaseNotesPage: "https://create.roblox.com/docs/release-notes/release-notes-",
+  announcementsCategory: "https://devforum.roblox.com/c/updates/announcements/26.json",
+  updatesCategory: "https://devforum.roblox.com/c/updates.json",
   robloxStatus: "https://status.roblox.com",
   creatorStore: "https://catalog.roblox.com",
   searchEngine: "https://duckduckgo.com/html",

@@ -3,6 +3,8 @@ import {
   buildSearchUserMap,
   buildUserMap,
   formatTopics,
+  isStaffUser,
+  staffUsernames,
   toForumHit,
   topicLine,
 } from "../../src/lib/discourse.js";
@@ -62,5 +64,34 @@ describe("formatTopics", () => {
   it("limits and joins", () => {
     const out = formatTopics([sample, { ...sample, id: 43 }], [], 1);
     expect(out.split("\n\n").length).toBe(1);
+  });
+});
+
+describe("isStaffUser", () => {
+  it("flags admin / moderator / high trust / staff group", () => {
+    expect(isStaffUser({ id: 1, username: "a", admin: true })).toBe(true);
+    expect(isStaffUser({ id: 2, username: "b", moderator: true })).toBe(true);
+    expect(isStaffUser({ id: 3, username: "c", trust_level: 4 })).toBe(true);
+    expect(isStaffUser({ id: 4, username: "d", primary_group_name: "Roblox Staff" })).toBe(true);
+  });
+
+  it("does not flag regular users", () => {
+    expect(isStaffUser({ id: 5, username: "e" })).toBe(false);
+    expect(isStaffUser({ id: 6, username: "f", trust_level: 2 })).toBe(false);
+    expect(isStaffUser({ id: 7, username: "g", primary_group_name: "Members" })).toBe(false);
+  });
+});
+
+describe("staffUsernames", () => {
+  it("returns the set of staff usernames", () => {
+    const set = staffUsernames([
+      { id: 1, username: "alice", admin: true },
+      { id: 2, username: "bob", trust_level: 1 },
+      { id: 3, username: "carol", primary_group_name: "Roblox Staff" },
+    ]);
+    expect(set.has("alice")).toBe(true);
+    expect(set.has("carol")).toBe(true);
+    expect(set.has("bob")).toBe(false);
+    expect(set.size).toBe(2);
   });
 });

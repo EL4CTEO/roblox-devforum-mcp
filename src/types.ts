@@ -28,6 +28,10 @@ export interface DiscourseTopic {
 export interface DiscourseUser {
   id: number;
   username: string;
+  admin?: boolean;
+  moderator?: boolean;
+  trust_level?: number;
+  primary_group_name?: string;
 }
 
 export interface DiscoursePost {
@@ -175,4 +179,30 @@ export interface ApiMemberSummary {
   returnType?: string;
   tags: string[];
   description?: string;
+}
+
+export interface ReleaseNoteSection {
+  new_features?: string[];
+  improvements?: string[];
+  fixes?: string[];
+  removed?: string[];
+}
+
+export interface NewsItem {
+  type: "release_note" | "announcement";
+  title: string;
+  url: string;
+  date: string;
+  summary: string;
+  version?: string;
+  sections?: ReleaseNoteSection;
+  author?: string;
+  category?: string;
+}
+
+export interface ReleaseNoteIndexEntry {
+  version: string;
+  title: string;
+  url: string;
+  date?: string;
 }

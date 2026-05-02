@@ -1,6 +1,6 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "5.1.1",
+  "version": "5.2.0",
   "description": "Agent-first MCP server for Roblox: DevForum, Creator Hub docs, API Dump, Creator Store, Luau docs, platform status. 7 consolidated tools, Resources with URI templates, Prompts, structured output, MCP logging, persistent cache. Runs locally over stdio (Claude Desktop) and remotely as a Cloudflare Worker (mobile / Connector).",
   "keywords": [
     "mcp",
@@ -30,6 +30,7 @@
   ],
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc",
+    "prepare": "node node_modules/typescript/bin/tsc",
     "start": "node build/index.js",
     "dev": "node node_modules/typescript/bin/tsc --watch",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
@@ -46,13 +47,13 @@
     "worker:tail": "wrangler tail"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.26.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "cheerio": "^1.0.0",
     "typescript": "^5.7.0",
     "zod": "^3.25.0"
   },
   "overrides": {
-    "@modelcontextprotocol/sdk": "1.26.0"
+    "@modelcontextprotocol/sdk": "1.29.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

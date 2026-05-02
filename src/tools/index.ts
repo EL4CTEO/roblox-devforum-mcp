@@ -4,6 +4,7 @@ import { register as registerCreatorStore } from "./creatorStore.js";
 import { register as registerForumSearch } from "./forumSearch.js";
 import { register as registerForumTaxonomy } from "./forumTaxonomy.js";
 import { register as registerForumThread } from "./forumThread.js";
+import { register as registerNews } from "./news.js";
 import { register as registerPlatformStatus } from "./platformStatus.js";
 import { register as registerRobloxApi } from "./robloxApi.js";
 import { register as registerRobloxDocs } from "./robloxDocs.js";
@@ -16,4 +17,5 @@ export function registerAllTools(server: McpServer, ctx: AppContext): void {
   registerRobloxDocs(server, ctx);
   registerPlatformStatus(server, ctx);
   registerCreatorStore(server, ctx);
+  registerNews(server, ctx);
 }

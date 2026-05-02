@@ -1,5 +1,8 @@
 import type { DiscourseSearchResponse, DiscourseTopic, DiscourseUser, ForumSearchHit } from "../types.js";
 export declare function buildUserMap(users: DiscourseUser[] | undefined): Map<number, string>;
+export declare function isStaffUser(u: DiscourseUser): boolean;
+export declare function staffUsernames(users: DiscourseUser[] | undefined): Set<string>;
+export declare function staffUserIds(users: DiscourseUser[] | undefined): Set<number>;
 export declare function buildSearchUserMap(data: DiscourseSearchResponse): Map<number, string>;
 export declare function topicAuthor(t: DiscourseTopic, users: Map<number, string>): string;
 export declare function topicUrl(t: DiscourseTopic): string;

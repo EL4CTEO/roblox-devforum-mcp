@@ -14,7 +14,7 @@ export const SERVER_CAPABILITIES = {
 export const SERVER_INSTRUCTIONS = [
     "Roblox knowledge MCP. Use it for research-style queries while you're coding inside Roblox Studio.",
     "",
-    "Tools (7):",
+    "Tools (8):",
     "- forum_search: unified DevForum search (status:solved, category, tag, top/latest/new). Use status='solved' for debugging.",
     "- forum_thread: read a thread + accepted answer + replies (paginated).",
     "- forum_taxonomy: list categories, list tags, or fetch one category's metadata.",
@@ -22,12 +22,14 @@ export const SERVER_INSTRUCTIONS = [
     "- roblox_docs: Creator Hub pages, Luau stdlib, and community DevForum tutorials.",
     "- platform_status: current Roblox platform/component status and incidents.",
     "- creator_store: search the Roblox catalog (models, plugins, audio).",
+    "- roblox_news: Creator Hub Release Notes + staff DevForum Announcements (filter by date/source/query). Call this before generating code to learn what just shipped or got deprecated.",
     "",
     "Resources expose stable URIs you can cite or read directly:",
     "- roblox-api://class/{className}, roblox-api://enum/{enumName}",
     "- roblox-luau://stdlib/{module}",
     "- roblox-devforum://thread/{topicId}, roblox-devforum://category/{slug}",
     "- roblox-docs://creator/{path}",
+    "- roblox-news://release/{version}",
     "",
     "Prompts: research-feature, explain-error, find-implementation-pattern, audit-deprecated-api.",
 ].join("\n");

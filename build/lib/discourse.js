@@ -8,6 +8,30 @@ export function buildUserMap(users) {
             map.set(u.id, u.username);
     return map;
 }
+export function isStaffUser(u) {
+    return Boolean(u.admin === true ||
+        u.moderator === true ||
+        (typeof u.trust_level === "number" && u.trust_level >= 4) ||
+        (typeof u.primary_group_name === "string" && /staff|roblox/i.test(u.primary_group_name)));
+}
+export function staffUsernames(users) {
+    const out = new Set();
+    if (!users)
+        return out;
+    for (const u of users)
+        if (isStaffUser(u))
+            out.add(u.username);
+    return out;
+}
+export function staffUserIds(users) {
+    const out = new Set();
+    if (!users)
+        return out;
+    for (const u of users)
+        if (isStaffUser(u))
+            out.add(u.id);
+    return out;
+}
 export function buildSearchUserMap(data) {
     const map = buildUserMap(data.users);
     if (map.size === 0 && data.posts) {

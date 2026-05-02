@@ -15,6 +15,29 @@ export function buildUserMap(users: DiscourseUser[] | undefined): Map<number, st
   return map;
 }
 
+export function isStaffUser(u: DiscourseUser): boolean {
+  return Boolean(
+    u.admin === true ||
+      u.moderator === true ||
+      (typeof u.trust_level === "number" && u.trust_level >= 4) ||
+      (typeof u.primary_group_name === "string" && /staff|roblox/i.test(u.primary_group_name))
+  );
+}
+
+export function staffUsernames(users: DiscourseUser[] | undefined): Set<string> {
+  const out = new Set<string>();
+  if (!users) return out;
+  for (const u of users) if (isStaffUser(u)) out.add(u.username);
+  return out;
+}
+
+export function staffUserIds(users: DiscourseUser[] | undefined): Set<number> {
+  const out = new Set<number>();
+  if (!users) return out;
+  for (const u of users) if (isStaffUser(u)) out.add(u.id);
+  return out;
+}
+
 export function buildSearchUserMap(data: DiscourseSearchResponse): Map<number, string> {
   const map = buildUserMap(data.users);
   if (map.size === 0 && data.posts) {

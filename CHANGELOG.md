@@ -1,5 +1,42 @@
 # Changelog
 
+## 5.2.0
+
+Adds an 8th tool focused on **what just shipped**: official Roblox news. Closes
+the gap between training-data cutoffs and current engine state, so an AI agent
+knows which APIs are new or just got deprecated before generating Roblox code.
+
+### Added
+
+- **`roblox_news` tool** — aggregates two official feeds:
+  - **Creator Hub Release Notes** (`https://create.roblox.com/docs/release-notes`)
+    — versioned weekly notes parsed into structured sections (`new_features`,
+    `improvements`, `fixes`, `removed`).
+  - **DevForum Announcements** (`/c/updates/announcements/26.json` plus any
+    sub-categories under `/c/updates/`) — filtered to posts authored by Roblox
+    staff (admin / moderator / `trust_level >= 4` / "Roblox Staff" group), with
+    the original poster (OP) checked rather than the last replier.
+  - Inputs: `since` (ISO date or relative `7d` / `30d` / `90d` /
+    `last_release`, default `30d`), `source` (`release_notes` | `announcements`
+    | `all`), `query`, `limit`.
+  - Per-tool caches: 1 h for the release-notes index, 24 h for individual
+    release notes; announcements use the default 5 min HTTP cache.
+- **`roblox-news://release/{version}` resource** — single release note rendered
+  as markdown, useful to pin a specific version in conversation memory.
+- **`audit-deprecated-api` prompt** now invokes `roblox_news` before falling
+  back to `forum_search`, so deprecation queries first hit the structured feed.
+- **Discourse staff helpers** in `src/lib/discourse.ts`: `isStaffUser`,
+  `staffUsernames`, `staffUserIds` — reusable across tools.
+
+### Changed
+
+- `@modelcontextprotocol/sdk` bumped from `1.26.0` to `1.29.0` (no breaking
+  changes; backport fixes including the Windows `windowsHide` stdio fix that
+  resolves the `npx` timeout reported on Windows hosts).
+- `package.json` gains a `prepare` script so `npx` installs from GitHub
+  rebuild `build/` automatically if it ever drifts.
+- `SERVER_INSTRUCTIONS` updated to describe the 8th tool and new resource.
+
 ## 5.1.1
 
 Bug-fix release addressing issues found during comprehensive QA testing.

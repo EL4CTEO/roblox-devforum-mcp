@@ -1,6 +1,7 @@
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { URLS } from "../config.js";
 import { LUAU_LIBRARY_NAMES, findLuauSection } from "../lib/htmlParse.js";
+import { extractReleaseNoteFromHtml, renderReleaseNoteMarkdown } from "../lib/releaseNotes.js";
 import { stripHtml } from "../lib/sanitize.js";
 function jsonResource(uri, data) {
     return {
@@ -167,6 +168,26 @@ export function registerAllResources(server, ctx) {
         const slug = String(vars.slug ?? "");
         const data = await ctx.http.getJson(`${URLS.devforum}/c/${encodeURIComponent(slug)}.json`);
         return jsonResource(uri.href, data);
+    });
+    // Templated: Roblox release note
+    server.registerResource("roblox-news-release", new ResourceTemplate("roblox-news://release/{version}", {
+        list: undefined,
+    }), {
+        title: "Roblox Release Note",
+        description: "A single Creator Hub weekly release note (use a numeric version, e.g. 674).",
+        mimeType: "text/markdown",
+    }, async (uri, vars) => {
+        const version = String(vars.version ?? "").replace(/[^\d]/g, "");
+        if (!version) {
+            return textResource(uri.href, "Version must be a numeric release id (e.g. 674).", "text/plain");
+        }
+        const url = `${URLS.releaseNotesPage}${version}`;
+        const html = await ctx.http.getHtml(url);
+        const item = extractReleaseNoteFromHtml(html, version, url);
+        if (!item) {
+            return textResource(uri.href, `Release notes for version ${version} not found at ${url}.`, "text/plain");
+        }
+        return textResource(uri.href, renderReleaseNoteMarkdown(item));
     });
     // Templated: Creator Hub doc page
     server.registerResource("roblox-docs-creator", new ResourceTemplate("roblox-docs://creator/{+path}", {

@@ -1,8 +1,12 @@
 import * as z from "zod";
-export declare const VERSION = "5.1.1";
+export declare const VERSION = "5.2.0";
 export declare const URLS: {
     readonly devforum: "https://devforum.roblox.com";
     readonly creatorDocs: "https://create.roblox.com/docs";
+    readonly releaseNotesIndex: "https://create.roblox.com/docs/release-notes";
+    readonly releaseNotesPage: "https://create.roblox.com/docs/release-notes/release-notes-";
+    readonly announcementsCategory: "https://devforum.roblox.com/c/updates/announcements/26.json";
+    readonly updatesCategory: "https://devforum.roblox.com/c/updates.json";
     readonly robloxStatus: "https://status.roblox.com";
     readonly creatorStore: "https://catalog.roblox.com";
     readonly searchEngine: "https://duckduckgo.com/html";

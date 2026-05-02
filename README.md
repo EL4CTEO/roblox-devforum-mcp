@@ -1,6 +1,6 @@
 # roblox-devforum-mcp
 
-MCP server for the Roblox developer ecosystem — DevForum, API reference, Creator Hub docs, Luau stdlib, Creator Store, platform status. **7 tools, 8 resources, 4 prompts.** No API keys needed.
+MCP server for the Roblox developer ecosystem — DevForum, API reference, Creator Hub docs, Luau stdlib, Creator Store, platform status, weekly news. **8 tools, 9 resources, 4 prompts.** No API keys needed.
 
 ## Install — one click (Claude Desktop)
 
@@ -12,7 +12,9 @@ Get the latest `.mcpb` file from [Releases](https://github.com/EL4CTEO/roblox-de
 
 Claude Desktop → **Settings** → **Extensions** → **Install Extension** → select the `.mcpb` file.
 
-Done. The 7 tools appear immediately at the next conversation.
+Done. The 8 tools appear immediately at the next conversation.
+
+To pin to a specific tagged release (reproducible installs), use `github:EL4CTEO/roblox-devforum-mcp#v5.2.0` instead of the bare repo reference.
 
 ---
 
@@ -82,6 +84,7 @@ claude.ai → Settings → Connectors → Add custom connector → URL: `https:/
 | `roblox_docs` | Read Creator Hub guides, Luau stdlib, or community tutorials |
 | `platform_status` | Check if Roblox services are operational |
 | `creator_store` | Search models, audio, plugins, meshes, decals, animations, badges |
+| `roblox_news` | Creator Hub Release Notes + DevForum staff Announcements (filter by date / source / query) |
 
 Every tool returns both readable markdown and a structured JSON payload.
 
@@ -96,6 +99,7 @@ Every tool returns both readable markdown and a structured JSON payload.
 | `roblox-luau://stdlib/{module}` | Luau library reference |
 | `roblox-devforum://thread/{id}` | Thread JSON |
 | `roblox-docs://creator/{path}` | Creator Hub page |
+| `roblox-news://release/{version}` | Single release note rendered as markdown |
 
 ## Prompts
 
@@ -124,7 +128,7 @@ npm run build
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm run test         # vitest (45 tests)
+npm run test         # vitest (60 tests)
 npm run check        # lint + typecheck + test
 npm run build        # tsc → build/
 ```
