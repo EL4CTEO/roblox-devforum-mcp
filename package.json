@@ -1,0 +1,32 @@
+{
+  "name": "roblox-devforum-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that searches the Roblox DevForum and official creator docs so AI coding agents can debug Roblox games against real community and engine knowledge.",
+  "keywords": ["mcp", "model-context-protocol", "roblox", "devforum", "luau", "roblox-studio", "ai"],
+  "license": "MIT",
+  "author": "EL4CTEO",
+  "repository": { "type": "git", "url": "git+https://github.com/EL4CTEO/roblox-devforum-mcp.git" },
+  "homepage": "https://github.com/EL4CTEO/roblox-devforum-mcp#readme",
+  "bugs": { "url": "https://github.com/EL4CTEO/roblox-devforum-mcp/issues" },
+  "type": "module",
+  "bin": { "roblox-devforum-mcp": "dist/index.js" },
+  "main": "dist/index.js",
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test \"test/*.test.js\"",
+    "inspect": "npx -y @modelcontextprotocol/inspector node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}
