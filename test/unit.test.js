@@ -161,3 +161,21 @@ test("blurbs and automated posts are cleaned up", async () => {
   assert.equal(isAutomated({ username: "someone", cooked: "<p>automatically closed</p>" }), false);
   assert.equal(decodeEntities("entry &amp; entryKey=1"), "entry & entryKey=1");
 });
+
+test("a fresh thread outranks an old solved one", () => {
+  const at = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const topics = [
+    { id: 1, title: "old solved", bumped_at: at(6 * 365), posts_count: 9, reply_count: 8, like_count: 20, has_accepted_answer: true },
+    { id: 2, title: "fresh unsolved", bumped_at: at(20), posts_count: 4, reply_count: 3, like_count: 1 },
+  ];
+  assert.equal(rank(topics, [])[0].topic.id, 2);
+});
+
+test("age still loses to a much better relevance match", () => {
+  const at = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const topics = [
+    { id: 1, title: "top hit, 1 year old", bumped_at: at(365), posts_count: 6, reply_count: 5, like_count: 10, has_accepted_answer: true },
+    { id: 2, title: "weak hit, brand new", bumped_at: at(2), posts_count: 1, like_count: 0 },
+  ];
+  assert.equal(rank(topics, [])[0].topic.id, 1);
+});

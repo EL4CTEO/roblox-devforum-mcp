@@ -11,13 +11,16 @@ export interface Ranked {
 const SOLVED_TAGS = new Set(["solved", "fixed", "confirmed", "resolved"]);
 const DEAD_TAGS = new Set(["cannot-reproduce", "duplicate", "not-a-bug", "invalid", "by-design"]);
 
+/** Triage status taken only from the topic's own tags — no inference. */
+function tagStatus(topic: RawTopic): string | undefined {
+  return (topic.tags ?? [])
+    .map((t) => t.toLowerCase())
+    .find((t) => SOLVED_TAGS.has(t) || DEAD_TAGS.has(t));
+}
+
 /** Status tags Roblox staff apply to bug reports, surfaced verbatim to the model. */
 export function bugStatus(topic: RawTopic): string | undefined {
-  const tags = (topic.tags ?? []).map((t) => t.toLowerCase());
-  const status = tags.find((t) => SOLVED_TAGS.has(t) || DEAD_TAGS.has(t));
-  if (status) return status;
-  if (topic.has_accepted_answer) return "solved";
-  return undefined;
+  return tagStatus(topic) ?? (topic.has_accepted_answer ? "solved" : undefined);
 }
 
 function ageYears(iso: string | undefined): number {
@@ -44,13 +47,18 @@ export function rank(topics: RawTopic[], posts: RawPost[], originalOrder = false
     if (originalOrder) return { topic, post, score: -index };
 
     let score = 100 - index * 3; // Discourse relevance stays the backbone
-    const status = bugStatus(topic);
     if (topic.has_accepted_answer) score += 45;
+
+    // Read tags directly: bugStatus() infers "solved" from has_accepted_answer, so scoring
+    // off it would count the same signal twice.
+    const status = tagStatus(topic);
     if (status && SOLVED_TAGS.has(status)) score += 25;
     if (status && DEAD_TAGS.has(status)) score -= 20;
 
+    // Roblox changes fast, so age is weighted hard: a 3-year-old thread loses more than an
+    // accepted answer is worth (+45), and past ~6 years nothing outranks a current thread.
     const bumpedAge = ageYears(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at);
-    score -= Math.min(bumpedAge * 7, 45); // stale threads decay, but never to zero
+    score -= Math.min(bumpedAge * 15, 85);
     score += Math.min((topic.like_count ?? 0) * 1.5, 25);
     score += Math.min((topic.reply_count ?? 0) * 0.8, 15);
     if ((topic.posts_count ?? 0) <= 1) score -= 8; // nobody ever replied
