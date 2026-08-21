@@ -14,6 +14,8 @@ const EXPECTED = [
   "list_categories",
   "search_creator_docs",
   "get_engine_api",
+  "get_whats_new",
+  "get_weekly_recap",
 ];
 
 async function connect() {

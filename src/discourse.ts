@@ -54,6 +54,41 @@ export function categoryName(id: number | undefined): string {
   return ID_TO_SLUG.get(id) ?? `category-${id}`;
 }
 
+/** Sub-category slug -> parent slug. Discourse 301-redirects the short form, costing a round-trip. */
+const CATEGORY_PARENTS: Partial<Record<CategorySlug, CategorySlug>> = {
+  "announcements": "updates",
+  "news-alerts": "updates",
+  "release-notes": "updates",
+  "scripting-support": "help-and-feedback",
+  "building-support": "help-and-feedback",
+  "art-design-support": "help-and-feedback",
+  "game-design-support": "help-and-feedback",
+  "platform-usage-support": "help-and-feedback",
+  "creations-feedback": "help-and-feedback",
+  "code-review": "help-and-feedback",
+  "cloud-apps": "help-and-feedback",
+  "engine-bugs": "bug-reports",
+  "studio-bugs": "bug-reports",
+  "website-bugs": "bug-reports",
+  "mobile-bugs": "bug-reports",
+  "xbox-bugs": "bug-reports",
+  "documentation-issues": "bug-reports",
+  "creator-hub-bugs": "bug-reports",
+  "cloud-services-bugs": "bug-reports",
+  "purchasing-bugs": "bug-reports",
+  "other-bugs": "bug-reports",
+  "engine-features": "feature-requests",
+  "studio-features": "feature-requests",
+  "community-resources": "resources",
+  "community-tutorials": "resources",
+};
+
+/** Canonical Discourse listing path, e.g. "updates/release-notes/62". */
+export function categoryPath(slug: CategorySlug): string {
+  const parent = CATEGORY_PARENTS[slug];
+  return `${parent ? `${parent}/` : ""}${slug}/${CATEGORIES[slug]}`;
+}
+
 export function topicUrl(id: number, slug?: string, postNumber?: number): string {
   const base = `${BASE_URL}/t/${slug ? `${slug}/` : ""}${id}`;
   return postNumber && postNumber > 1 ? `${base}/${postNumber}` : base;
@@ -76,6 +111,8 @@ export interface RawTopic {
   bumped_at?: string;
   has_accepted_answer?: boolean;
   closed?: boolean;
+  pinned?: boolean;
+  pinned_globally?: boolean;
 }
 
 export interface RawPost {
@@ -162,16 +199,22 @@ export async function listTopics(
   category?: CategorySlug | undefined,
   tag?: string,
   period?: string,
+  page = 0,
 ): Promise<RawTopic[]> {
   let path: string;
   if (tag) path = `/tag/${encodeURIComponent(tag)}/l/${listing}.json`;
-  else if (category) path = `/c/${category}/${CATEGORIES[category]}/l/${listing}.json`;
+  else if (category) path = `/c/${categoryPath(category)}/l/${listing}.json`;
   else path = `/${listing}.json`;
   const url = new URL(`${BASE_URL}${path}`);
   if (listing === "top" && period) url.searchParams.set("period", period);
+  if (page > 0) url.searchParams.set("page", String(page));
   const data = await getJson<{ topic_list?: { topics?: RawTopic[] } }>(url.toString(), TTL.search);
-  return data.topic_list?.topics ?? [];
+  // "About the … category" topics are pinned to every listing and never carry real content.
+  return (data.topic_list?.topics ?? []).filter((t) => !t.pinned && !t.pinned_globally);
 }
+
+/** The Announcements tag Roblox puts on its weekly "what shipped" digest. */
+export const WEEKLY_RECAP_TAG = "weekly-recap";
 
 export interface CategoryInfo {
   id: number;

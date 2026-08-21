@@ -45,13 +45,17 @@ export function htmlToMarkdown(html: string): string {
   s = s.replace(/<\/li>/gi, "");
   s = s.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, body: string) => `**${stripTags(body).trim()}**`);
   s = s.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, body: string) => `*${stripTags(body).trim()}*`);
+  // Discourse renders emoji as <img class="emoji" alt=":star:">; keep the shortcode, drop the frame.
+  s = s.replace(/<img\b[^>]*class="[^"]*emoji[^"]*"[^>]*alt="([^"]*)"[^>]*>/gi, (_m, alt: string) => alt);
   s = s.replace(/<img\b[^>]*alt="([^"]*)"[^>]*>/gi, (_m, alt: string) => (alt ? `[image: ${alt}]` : "[image]"));
   s = s.replace(/<img\b[^>]*>/gi, "[image]");
   s = s.replace(
     /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
     (_m, href: string, body: string) => {
       const text = stripTags(body).trim();
-      if (!text) return href;
+      // Heading anchors (<a name=… class="anchor"></a>) carry no text; emitting their href
+      // would paste "#p-123-section-name" into the middle of the heading.
+      if (!text) return "";
       return text === href ? href : `[${text}](${href})`;
     },
   );

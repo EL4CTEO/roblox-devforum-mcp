@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerForumTools } from "./tools/forum.js";
 import { registerDocsTools } from "./tools/docs.js";
+import { registerUpdateTools } from "./tools/updates.js";
 
 const VERSION = "1.0.0";
 
@@ -23,12 +24,14 @@ export function createServer(): McpServer {
         "1) call search_bugs with the literal error text to see if Roblox already has a triaged bug report; " +
         "2) call search_devforum for community threads and workarounds, then get_thread on the most promising topic_id; " +
         "3) call get_engine_api or search_creator_docs to confirm the intended API behaviour before recommending code. " +
+        "When something worked before and broke for no clear reason, call get_whats_new first — a Roblox release may explain it. " +
         "Cite the thread URLs you relied on, and note the thread date — Roblox behaviour changes often.",
     },
   );
 
   registerForumTools(server);
   registerDocsTools(server);
+  registerUpdateTools(server);
   return server;
 }
 
