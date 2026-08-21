@@ -153,3 +153,11 @@ test("scorePath rewards full-query coverage and exact page names", () => {
   assert.ok(exact > partial);
   assert.equal(scorePath("content/en-us/ui/buttons.md", ["datastore"], "datastore"), 0);
 });
+
+test("blurbs and automated posts are cleaned up", async () => {
+  const { isAutomated } = await import("../dist/tools/forum.js");
+  assert.equal(isAutomated({ username: "system", cooked: "<p>This topic was automatically closed.</p>" }), true);
+  assert.equal(isAutomated({ username: "system", cooked: "<p>A real answer.</p>" }), false);
+  assert.equal(isAutomated({ username: "someone", cooked: "<p>automatically closed</p>" }), false);
+  assert.equal(decodeEntities("entry &amp; entryKey=1"), "entry & entryKey=1");
+});

@@ -37,7 +37,7 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost): string {
   ];
   if (topic.tags?.length) meta.push(topic.tags.slice(0, 4).join(", "));
 
-  const blurb = post?.blurb ? `\n   ${post.blurb.replace(/\s+/g, " ").slice(0, 260)}` : "";
+  const blurb = post?.blurb ? `\n   ${decodeEntities(post.blurb).replace(/\s+/g, " ").slice(0, 260)}` : "";
   return [
     `${index}. ${badge}${topic.title}`,
     `   ${meta.join(" · ")}`,
@@ -46,6 +46,12 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/** Discourse's bot posts ("This topic was automatically closed…") never help a debugging agent. */
+export function isAutomated(post: RawPost): boolean {
+  if (post.username !== "system") return false;
+  return /automatically closed|automatically deleted/i.test(post.cooked ?? "");
 }
 
 function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
@@ -163,7 +169,7 @@ export function registerForumTools(server: McpServer): void {
         const first = all[0];
         const accepted = all.find((p) => p.accepted_answer && p.post_number !== first?.post_number);
         const rest = all
-          .filter((p) => p !== first && p !== accepted)
+          .filter((p) => p !== first && p !== accepted && !isAutomated(p))
           .sort((a, b) => {
             const likes = (p: RawPost) => p.actions_summary?.find((x) => x.id === 2)?.count ?? 0;
             const staff = (p: RawPost) => (p.staff || p.admin || p.moderator ? 1 : 0);
