@@ -1,8 +1,6 @@
 /** Official Roblox documentation: creator-docs sources + the engine API dump. */
 
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { cachedJson } from "./cache.js";
 import { getGithubJson, getText, TTL } from "./http.js";
 
 const DOCS_REPO = "Roblox/creator-docs";
@@ -17,7 +15,9 @@ const API_DUMP_URL =
 let treePromise: Promise<string[]> | undefined;
 
 async function docPaths(): Promise<string[]> {
-  treePromise ??= (async () => {
+  // The raw tree is ~3.3 MB; only the filtered path list is kept, and it is cached to disk
+  // so a new session does not pay that download again on its first docs search.
+  treePromise ??= cachedJson("docs-tree", 24 * 3_600_000, async () => {
     const data = await getGithubJson<{ tree?: Array<{ path: string; type: string }> }>(
       `https://api.github.com/repos/${DOCS_REPO}/git/trees/${DOCS_BRANCH}?recursive=1`,
       TTL.static,
@@ -25,7 +25,7 @@ async function docPaths(): Promise<string[]> {
     return (data.tree ?? [])
       .filter((n) => n.type === "blob" && n.path.startsWith(DOCS_ROOT) && /\.(md|yaml)$/.test(n.path))
       .map((n) => n.path);
-  })();
+  });
   return treePromise;
 }
 
@@ -215,28 +215,11 @@ interface ApiDump {
 let dumpPromise: Promise<ApiDump> | undefined;
 
 async function apiDump(): Promise<ApiDump> {
-  dumpPromise ??= (async () => {
-    const dir = join(tmpdir(), "roblox-devforum-mcp");
-    const file = join(dir, "api-dump.json");
-    const maxAge = 12 * 3_600_000;
-    try {
-      const info = await stat(file);
-      if (Date.now() - info.mtimeMs < maxAge) {
-        return JSON.parse(await readFile(file, "utf8")) as ApiDump;
-      }
-    } catch {
-      /* no usable cache on disk */
-    }
-    const text = await getText(API_DUMP_URL, 0);
-    const parsed = JSON.parse(text) as ApiDump;
-    try {
-      await mkdir(dir, { recursive: true });
-      await writeFile(file, text, "utf8");
-    } catch {
-      /* caching is best-effort */
-    }
-    return parsed;
-  })();
+  dumpPromise ??= cachedJson(
+    "api-dump",
+    12 * 3_600_000,
+    async () => JSON.parse(await getText(API_DUMP_URL, 0)) as ApiDump,
+  );
   return dumpPromise;
 }
 
@@ -273,6 +256,85 @@ export async function classChain(name: string): Promise<ApiClass[]> {
     current = current.Superclass ? byName.get(current.Superclass) : undefined;
   }
   return chain;
+}
+
+/* ----------------------------- API health check ---------------------------- */
+
+export interface MemberLookup {
+  /** The class the member was actually found on — may be a superclass. */
+  owner: ApiClass;
+  member: ApiMember;
+}
+
+/** Resolve `Class.Member` through the inheritance chain, case-insensitively. */
+export async function resolveMember(className: string, memberName: string): Promise<MemberLookup | undefined> {
+  const target = memberName.toLowerCase();
+  for (const owner of await classChain(className)) {
+    const member = (owner.Members ?? []).find((m) => m.Name.toLowerCase() === target);
+    if (member) return { owner, member };
+  }
+  return undefined;
+}
+
+/** Member names on a class (and its superclasses) that look like the given name. */
+export async function suggestMembers(className: string, memberName: string, limit = 6): Promise<string[]> {
+  const target = memberName.toLowerCase();
+  const names = new Set<string>();
+  for (const owner of await classChain(className)) {
+    for (const m of owner.Members ?? []) {
+      const lower = m.Name.toLowerCase();
+      if (lower.includes(target) || target.includes(lower)) names.add(m.Name);
+      if (names.size >= limit) return [...names];
+    }
+  }
+  return [...names];
+}
+
+/**
+ * Pull a `deprecation_message` out of a reference YAML file. The dump marks members as
+ * deprecated but never says what replaced them; the docs sometimes do.
+ */
+export function parseDeprecationMessage(yaml: string, memberName?: string): string | undefined {
+  // Reference YAML lists members as "  - name: Class.Member"; the class-level fields sit
+  // above the first such entry.
+  const blocks = yaml.split(/\n(?=\s*-\s+name:\s)/);
+  const block = memberName
+    ? blocks.find((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*\\.${memberName}\\s*$`, "m").test(b))
+    : blocks[0];
+  if (!block) return undefined;
+
+  const lines = block.split("\n");
+  const at = lines.findIndex((l) => /^\s*deprecation_message:/.test(l));
+  if (at < 0) return undefined;
+
+  const first = lines[at] ?? "";
+  const inline = first.slice(first.indexOf(":") + 1).trim();
+  if (inline && !/^[|>][-+]?$/.test(inline)) {
+    const unquoted = inline.replace(/^['"]|['"]$/g, "").trim();
+    return unquoted || undefined;
+  }
+  if (!/^[|>][-+]?$/.test(inline)) return undefined;
+
+  // Block scalar: take the following lines that are indented further than the key.
+  const indent = (first.match(/^\s*/)?.[0] ?? "").length;
+  const body: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    if (line.trim() === "") continue;
+    if ((line.match(/^\s*/)?.[0] ?? "").length <= indent) break;
+    body.push(line.trim());
+  }
+  const text = body.join(" ").trim();
+  return text || undefined;
+}
+
+/** Best-effort replacement guidance from the docs for a deprecated class or member. */
+export async function deprecationNote(className: string, memberName?: string): Promise<string | undefined> {
+  try {
+    const yaml = await fetchDoc(`reference/engine/classes/${className}.yaml`);
+    return parseDeprecationMessage(yaml, memberName) ?? (memberName ? parseDeprecationMessage(yaml) : undefined);
+  } catch {
+    return undefined; // docs are a bonus, never required
+  }
 }
 
 export function securityOf(member: ApiMember): string | undefined {

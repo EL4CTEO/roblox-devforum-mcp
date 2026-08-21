@@ -179,3 +179,40 @@ test("age still loses to a much better relevance match", () => {
   ];
   assert.equal(rank(topics, [])[0].topic.id, 1);
 });
+
+test("parseDeprecationMessage reads inline and block-scalar values", async () => {
+  const { parseDeprecationMessage } = await import("../dist/docs.js");
+  const yaml = [
+    "name: BodyVelocity",
+    "deprecation_message: |",
+    "  This object is deprecated and should not be used for new work.",
+    "  Use LinearVelocity instead.",
+    "properties:",
+    "  - name: BodyVelocity.Velocity",
+    "    deprecation_message: 'Use LinearVelocity.VectorVelocity.'",
+    "    security:",
+    "      read: None",
+    "  - name: BodyVelocity.P",
+    "    deprecation_message: ''",
+  ].join("\n");
+  assert.match(parseDeprecationMessage(yaml), /Use LinearVelocity instead/);
+  assert.equal(parseDeprecationMessage(yaml, "Velocity"), "Use LinearVelocity.VectorVelocity.");
+  assert.equal(parseDeprecationMessage(yaml, "P"), undefined);
+  assert.equal(parseDeprecationMessage(yaml, "Missing"), undefined);
+});
+
+test("cachedJson round-trips and reuses a fresh entry", async () => {
+  const { cachedJson } = await import("../dist/cache.js");
+  const key = `test-${Date.now()}`;
+  let calls = 0;
+  const load = async () => { calls += 1; return { value: calls }; };
+  assert.deepEqual(await cachedJson(key, 60_000, load), { value: 1 });
+  assert.deepEqual(await cachedJson(key, 60_000, load), { value: 1 }, "second call should hit disk");
+  assert.equal(calls, 1);
+  assert.deepEqual(await cachedJson(key, -1, load), { value: 2 }, "expired entry should reload");
+
+  const { rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  await rm(join(tmpdir(), "roblox-devforum-mcp", `${key}.json`), { force: true });
+});

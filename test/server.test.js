@@ -16,6 +16,7 @@ const EXPECTED = [
   "get_engine_api",
   "get_whats_new",
   "get_weekly_recap",
+  "check_api_health",
 ];
 
 async function connect() {

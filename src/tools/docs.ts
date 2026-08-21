@@ -12,6 +12,9 @@ import {
   securityOf,
   signature,
   suggestClasses,
+  suggestMembers,
+  resolveMember,
+  deprecationNote,
   type ApiMember,
 } from "../docs.js";
 import { truncate } from "../format.js";
@@ -59,6 +62,90 @@ export function registerDocsTools(server: McpServer): void {
         );
       } catch (err) {
         return toToolError("search_creator_docs failed", err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "check_api_health",
+    {
+      title: "Check Roblox APIs for deprecation",
+      description:
+        "Batch-check Roblox APIs before you ship Luau that uses them. Pass entries like \"Humanoid.MoveTo\", \"BodyVelocity\" or \"DataStoreService.GetDataStore\" and each is verified against the live API dump: does it still exist, is it deprecated (with the official replacement where the docs give one), is it locked behind a security level normal scripts cannot use, and does it yield. Use this whenever you are about to write or review Roblox code — models often reproduce APIs that Roblox retired years ago.",
+      inputSchema: {
+        members: z
+          .array(z.string().min(2))
+          .min(1)
+          .max(25)
+          .describe("Entries to check: \"ClassName\" or \"ClassName.MemberName\", e.g. [\"BodyVelocity\", \"Humanoid.MoveTo\"]."),
+        max_tokens: z.number().int().min(300).max(12000).default(2500),
+      },
+      annotations: READ_ONLY,
+    },
+    async (args) => {
+      try {
+        const lines = await Promise.all(
+          args.members.map(async (entry) => {
+            const raw = entry.trim().replace(/^game[.:]/i, "").replace(/[():].*$/, "");
+            const dot = raw.lastIndexOf(".");
+            const className = dot > 0 ? raw.slice(0, dot) : raw;
+            const memberName = dot > 0 ? raw.slice(dot + 1) : undefined;
+
+            const cls = await findClass(className);
+            if (!cls) {
+              const enumType = await findEnum(className);
+              if (enumType) return `OK        ${entry} — Enum.${enumType.Name} exists.`;
+              const near = await suggestClasses(className);
+              return `NOT FOUND ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+            }
+
+            const notes: string[] = [];
+            let state = "OK       ";
+
+            if (!memberName) {
+              if (cls.Tags?.includes("Deprecated")) {
+                state = "DEPRECATED";
+                const note = await deprecationNote(cls.Name);
+                if (note) notes.push(note);
+              }
+              if (cls.Tags?.includes("NotCreatable")) notes.push("not creatable with Instance.new");
+              if (cls.Tags?.includes("Service")) notes.push("get it via game:GetService");
+              return `${state} ${entry} — class ${cls.Name}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
+            }
+
+            const found = await resolveMember(cls.Name, memberName);
+            if (!found) {
+              const near = await suggestMembers(cls.Name, memberName);
+              return `NOT FOUND ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+            }
+
+            const { owner, member } = found;
+            if (member.Tags?.includes("Deprecated")) {
+              state = "DEPRECATED";
+              const note = await deprecationNote(owner.Name, member.Name);
+              if (note) notes.push(note);
+            }
+            const security = securityOf(member);
+            if (security) {
+              state = state === "DEPRECATED" ? state : "RESTRICTED";
+              notes.push(`security: ${security} — normal game scripts cannot use this`);
+            }
+            if (member.Tags?.includes("NotScriptable")) notes.push("not scriptable");
+            if (member.Tags?.includes("Yields")) notes.push("yields, call from a coroutine or with care");
+            if (member.Tags?.includes("ReadOnly")) notes.push("read-only");
+            if (owner.Name !== cls.Name) notes.push(`inherited from ${owner.Name}`);
+
+            return `${state} ${entry} — ${signature(member)}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
+          }),
+        );
+
+        const flagged = lines.filter((l) => !l.startsWith("OK")).length;
+        const header = flagged === 0
+          ? `All ${lines.length} APIs are current and usable from game scripts.`
+          : `${flagged} of ${lines.length} APIs need attention:`;
+        return ok(truncate(`${header}\n\n${lines.join("\n")}`, args.max_tokens, "check fewer at a time"));
+      } catch (err) {
+        return toToolError("check_api_health failed", err);
       }
     },
   );
