@@ -62,7 +62,7 @@ function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   const accepted = post.accepted_answer ? " ✅ ACCEPTED ANSWER" : "";
   const likes = post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
   const header = `--- #${post.post_number} by ${author}${role}${accepted} · ${relativeDate(post.created_at)}${likes ? ` · ${likes} likes` : ""}`;
-  const body = htmlToMarkdown(post.cooked ?? "");
+  const body = htmlToMarkdown(post.cooked ?? "", { keepQuotes: post.post_number === 1 });
   const url = topicUrl(topic.id, topic.slug, post.post_number);
   return `${header}\n${truncate(body, budget, `open ${url}`)}`;
 }
@@ -121,7 +121,7 @@ export function registerForumTools(server: McpServer): void {
         if (topics.length === 0) {
           return ok(`No DevForum threads matched ${label}. Try fewer words, the raw error text, or drop the filters.`);
         }
-        const ranked = rank(topics, posts, args.order !== "relevance").slice(0, args.limit);
+        const ranked = rank(topics, posts, args.order !== "relevance", matchedBy).slice(0, args.limit);
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
@@ -161,7 +161,7 @@ export function registerForumTools(server: McpServer): void {
             `No bug reports matched ${label}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
-        const ranked = rank(topics, posts).slice(0, args.limit);
+        const ranked = rank(topics, posts, false, matchedBy).slice(0, args.limit);
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");

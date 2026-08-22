@@ -260,6 +260,19 @@ export async function classChain(name: string): Promise<ApiClass[]> {
 
 /* ----------------------------- API health check ---------------------------- */
 
+/**
+ * Datatypes (Vector3, CFrame, UDim2…) are not classes and never appear in the API dump, so
+ * a class lookup for them wrongly reports "not found". The docs are the source of truth.
+ */
+export async function findDatatype(name: string): Promise<string | undefined> {
+  const target = name.toLowerCase();
+  const paths = await docPaths();
+  const match = paths.find(
+    (p) => p.toLowerCase() === `${DOCS_ROOT}reference/engine/datatypes/${target}.yaml`,
+  );
+  return match ? titleOf(match) : undefined;
+}
+
 export interface MemberLookup {
   /** The class the member was actually found on — may be a superclass. */
   owner: ApiClass;

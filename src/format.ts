@@ -16,12 +16,17 @@ export function decodeEntities(input: string): string {
  * Convert a Discourse `cooked` HTML post into compact Markdown.
  * Code blocks are preserved verbatim; quotes, images and onebox chrome are dropped.
  */
-export function htmlToMarkdown(html: string): string {
+export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } = {}): string {
   if (!html) return "";
   let s = html;
 
-  // Drop containers that are pure noise for a debugging agent.
-  s = s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"[\s\S]*?<\/aside>/gi, "\n[quoted earlier reply]\n");
+  // Drop containers that are pure noise for a debugging agent. A quote in a reply is almost
+  // always a re-quote of something already on screen — but the first post of a topic has
+  // nothing earlier to quote, so there the block is real content (Roblox styles its Weekly
+  // Recap summaries this way), and callers pass keepQuotes for it.
+  s = options.keepQuotes
+    ? s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"([\s\S]*?)<\/aside>/gi, (_m, body: string) => body)
+    : s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"[\s\S]*?<\/aside>/gi, "\n[quoted earlier reply]\n");
   s = s.replace(/<aside\b[\s\S]*?<\/aside>/gi, "");
   s = s.replace(/<(script|style|svg|noscript)\b[\s\S]*?<\/\1>/gi, "");
   s = s.replace(/<div\b[^>]*class="[^"]*(lightbox-wrapper|meta|onebox-body)[^"]*"[\s\S]*?<\/div>/gi, "");
@@ -65,6 +70,7 @@ export function htmlToMarkdown(html: string): string {
   return s
     .split("\n")
     .map((line) => line.replace(/[ \t]+$/g, ""))
+    .filter((line) => line.trim() !== ">") // leftover blockquote markers from unwrapped quotes
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

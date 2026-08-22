@@ -8,6 +8,7 @@ import {
   fetchDoc,
   findClass,
   findEnum,
+  findDatatype,
   searchDocs,
   securityOf,
   signature,
@@ -87,6 +88,16 @@ export function registerDocsTools(server: McpServer): void {
         const lines = await Promise.all(
           args.members.map(async (entry) => {
             const raw = entry.trim().replace(/^game[.:]/i, "").replace(/[():].*$/, "");
+
+            // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
+            const enumMatch = /^Enum\.([A-Za-z0-9_]+)/.exec(raw);
+            if (enumMatch?.[1]) {
+              const enumType = await findEnum(enumMatch[1]);
+              return enumType
+                ? `OK        ${entry} — Enum.${enumType.Name} exists (${enumType.Items?.length ?? 0} items).`
+                : `NOT FOUND ${entry} — no Enum named "${enumMatch[1]}".`;
+            }
+
             const dot = raw.lastIndexOf(".");
             const className = dot > 0 ? raw.slice(0, dot) : raw;
             const memberName = dot > 0 ? raw.slice(dot + 1) : undefined;
@@ -95,6 +106,11 @@ export function registerDocsTools(server: McpServer): void {
             if (!cls) {
               const enumType = await findEnum(className);
               if (enumType) return `OK        ${entry} — Enum.${enumType.Name} exists.`;
+              // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
+              const datatype = await findDatatype(className);
+              if (datatype) {
+                return `OK        ${entry} — ${datatype} is a datatype; see https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
+              }
               const near = await suggestClasses(className);
               return `NOT FOUND ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
             }

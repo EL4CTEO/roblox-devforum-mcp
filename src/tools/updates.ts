@@ -99,7 +99,7 @@ export function registerUpdateTools(server: McpServer): void {
         }
 
         const topic = await getTopic(chosen.id);
-        const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "");
+        const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "", { keepQuotes: true });
         const head = `# ${chosen.title}\npublished ${(chosen.created_at ?? "").slice(0, 10)} (${relativeDate(chosen.created_at)}) · ${topicUrl(chosen.id, chosen.slug)}`;
         return ok(truncate(`${head}\n\n${body}`, args.max_tokens, "open the recap"));
       } catch (err) {
@@ -140,7 +140,7 @@ export function registerUpdateTools(server: McpServer): void {
           let block = `## Weekly Recap\n${latestRecap.title}\n${relativeDate(latestRecap.created_at)} · ${topicUrl(latestRecap.id, latestRecap.slug)}`;
           if (args.include_recap_body) {
             const topic = await getTopic(latestRecap.id);
-            const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "");
+            const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "", { keepQuotes: true });
             if (body) block += `\n\n${truncate(body, Math.floor(args.max_tokens * 0.55), "open the recap")}`;
           }
           const older = recaps.slice(1).filter((t) => withinDays(t, args.days));
@@ -165,7 +165,7 @@ export function registerUpdateTools(server: McpServer): void {
           return ok(`Roblox published nothing in the last ${args.days} days. Try a longer window.`);
         }
 
-        const footer = "\nUse get_thread on any topic_id above to read the full post.";
+        const footer = "\n\nUse get_thread on any topic_id above to read the full post.";
         return ok(truncate(sections.join("\n\n"), args.max_tokens, "lower `days` or `limit`") + footer);
       } catch (err) {
         return toToolError("get_whats_new failed", err);

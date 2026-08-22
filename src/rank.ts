@@ -73,7 +73,12 @@ export function mergeResults(
  * Search hits arrive in Discourse relevance order; blend in signals that matter for
  * debugging so a solved 2025 thread outranks an unanswered 2018 one.
  */
-export function rank(topics: RawTopic[], posts: RawPost[], originalOrder = false): Ranked[] {
+export function rank(
+  topics: RawTopic[],
+  posts: RawPost[],
+  originalOrder = false,
+  matchedBy?: Map<number, string[]>,
+): Ranked[] {
   const byTopic = new Map<number, RawPost>();
   for (const post of posts) {
     const key = post.topic_id;
@@ -88,6 +93,11 @@ export function rank(topics: RawTopic[], posts: RawPost[], originalOrder = false
 
     let score = 100 - index * 3; // Discourse relevance stays the backbone
     if (topic.has_accepted_answer) score += 45;
+
+    // Independent phrasings agreeing on a thread is strong evidence it is on-topic, and the
+    // result line advertises the count, so it has to actually move the ranking.
+    const agreement = matchedBy?.get(topic.id)?.length ?? 1;
+    score += (agreement - 1) * 22;
 
     // Read tags directly: bugStatus() infers "solved" from has_accepted_answer, so scoring
     // off it would count the same signal twice.

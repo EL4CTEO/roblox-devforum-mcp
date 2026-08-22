@@ -229,3 +229,21 @@ test("mergeResults dedupes and promotes topics found by several phrasings", asyn
   assert.deepEqual(matchedBy.get(2), ["a", "b"]);
   assert.deepEqual(matchedBy.get(1), ["a"]);
 });
+
+test("rank scores agreement between phrasings", async () => {
+  const at = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const topics = [
+    { id: 1, title: "one phrasing", bumped_at: at(20), posts_count: 5, reply_count: 4 },
+    { id: 2, title: "three phrasings", bumped_at: at(20), posts_count: 5, reply_count: 4 },
+  ];
+  const matchedBy = new Map([[1, ["a"]], [2, ["a", "b", "c"]]]);
+  assert.equal(rank(topics, [], false, matchedBy)[0].topic.id, 2);
+  assert.equal(rank(topics, [], false)[0].topic.id, 1, "without agreement data, order is unchanged");
+});
+
+test("htmlToMarkdown keeps quotes only when asked", () => {
+  const html = '<aside class="quote"><blockquote><p>real recap intro</p></blockquote></aside>';
+  assert.match(htmlToMarkdown(html, { keepQuotes: true }), /real recap intro/);
+  assert.match(htmlToMarkdown(html), /\[quoted earlier reply\]/);
+  assert.doesNotMatch(htmlToMarkdown(html), /real recap intro/);
+});
