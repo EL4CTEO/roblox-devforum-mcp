@@ -216,3 +216,16 @@ test("cachedJson round-trips and reuses a fresh entry", async () => {
   const { join } = await import("node:path");
   await rm(join(tmpdir(), "roblox-devforum-mcp", `${key}.json`), { force: true });
 });
+
+test("mergeResults dedupes and promotes topics found by several phrasings", async () => {
+  const { mergeResults } = await import("../dist/rank.js");
+  const t = (id) => ({ id, title: `t${id}` });
+  const { topics, matchedBy } = mergeResults([
+    { query: "a", topics: [t(1), t(2)], posts: [{ id: 10, topic_id: 1, post_number: 1 }] },
+    { query: "b", topics: [t(3), t(2)], posts: [{ id: 10, topic_id: 1, post_number: 1 }] },
+  ]);
+  assert.equal(topics[0].id, 2, "matched by both queries, so first");
+  assert.deepEqual(topics.map((x) => x.id).sort(), [1, 2, 3]);
+  assert.deepEqual(matchedBy.get(2), ["a", "b"]);
+  assert.deepEqual(matchedBy.get(1), ["a"]);
+});

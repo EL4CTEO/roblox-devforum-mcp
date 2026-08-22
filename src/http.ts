@@ -60,21 +60,55 @@ export function clearCache(): void {
 
 /* ---------------------------- concurrency gate ---------------------------- */
 
-let active = 0;
-const queue: Array<() => void> = [];
+/**
+ * Concurrency is limited per host, not globally. The DevForum is a live Discourse instance
+ * that deserves a polite ceiling; raw.githubusercontent.com is a static CDN, and docs search
+ * fans out to a dozen files at once, so throttling it to the same number wastes whole waves.
+ */
+const CDN_HOSTS = new Set(["raw.githubusercontent.com", "api.github.com"]);
 
-async function acquire(): Promise<void> {
-  if (active < MAX_CONCURRENCY) {
-    active += 1;
-    return;
-  }
-  await new Promise<void>((resolve) => queue.push(resolve));
-  active += 1;
+function limitFor(host: string): number {
+  return CDN_HOSTS.has(host) ? Number(process.env.DEVFORUM_CDN_CONCURRENCY ?? 8) : MAX_CONCURRENCY;
 }
 
-function release(): void {
-  active -= 1;
-  queue.shift()?.();
+interface Gate {
+  active: number;
+  queue: Array<() => void>;
+}
+
+const gates = new Map<string, Gate>();
+
+function gateFor(host: string): Gate {
+  let gate = gates.get(host);
+  if (!gate) {
+    gate = { active: 0, queue: [] };
+    gates.set(host, gate);
+  }
+  return gate;
+}
+
+async function acquire(host: string): Promise<void> {
+  const gate = gateFor(host);
+  if (gate.active < limitFor(host)) {
+    gate.active += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => gate.queue.push(resolve));
+  gate.active += 1;
+}
+
+function release(host: string): void {
+  const gate = gateFor(host);
+  gate.active -= 1;
+  gate.queue.shift()?.();
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "unknown";
+  }
 }
 
 /* -------------------------------- fetching -------------------------------- */
@@ -100,7 +134,8 @@ async function fetchOnce(url: string, headers: Record<string, string>): Promise<
 }
 
 async function request(url: string, headers: Record<string, string>): Promise<Response> {
-  await acquire();
+  const host = safeHost(url);
+  await acquire(host);
   try {
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
@@ -125,7 +160,7 @@ async function request(url: string, headers: Record<string, string>): Promise<Re
     }
     throw lastError instanceof Error ? lastError : new Error(`Request failed: ${url}`);
   } finally {
-    release();
+    release(host);
   }
 }
 

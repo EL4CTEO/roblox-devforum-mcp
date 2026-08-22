@@ -14,11 +14,12 @@ import {
   search,
   topicUrl,
   type CategorySlug,
+  type SearchOptions,
   type RawPost,
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { bugStatus, rank } from "../rank.js";
+import { bugStatus, mergeResults, rank } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 const CATEGORY_SLUGS = Object.keys(CATEGORIES) as Array<keyof typeof CATEGORIES>;
@@ -26,7 +27,7 @@ const categoryEnum = z.enum(CATEGORY_SLUGS as [string, ...string[]]);
 
 const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
 
-function topicLine(index: number, topic: RawTopic, post?: RawPost): string {
+function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: string[]): string {
   const status = bugStatus(topic);
   const badge = status ? `[${status}] ` : "";
   const meta = [
@@ -36,6 +37,7 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost): string {
     relativeDate(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at),
   ];
   if (topic.tags?.length) meta.push(topic.tags.slice(0, 4).join(", "));
+  if (matchedBy && matchedBy.length > 1) meta.push(`matched ${matchedBy.length} phrasings`);
 
   const blurb = post?.blurb ? `\n   ${decodeEntities(post.blurb).replace(/\s+/g, " ").slice(0, 260)}` : "";
   return [
@@ -65,6 +67,25 @@ function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   return `${header}\n${truncate(body, budget, `open ${url}`)}`;
 }
 
+const querySchema = z
+  .union([z.string().min(2), z.array(z.string().min(2)).min(1).max(5)])
+  .describe(
+    "Search text, or an array of up to 5 phrasings run in parallel and merged. Multiple phrasings are the fast way to cover a problem: [\"DataStore 502\", \"API Services rejected request\", \"datastore timeout\"]. Topics found by more than one phrasing rank highest.",
+  );
+
+/** Run every phrasing at once and merge, so one tool call covers a whole line of enquiry. */
+async function runQueries(
+  queries: string[],
+  base: Omit<SearchOptions, "query">,
+): Promise<{ topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]> }> {
+  const sets = await Promise.all(
+    queries.map(async (query) => ({ query, ...(await search({ ...base, query })) })),
+  );
+  return mergeResults(sets);
+}
+
+const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
+
 export function registerForumTools(server: McpServer): void {
   server.registerTool(
     "search_devforum",
@@ -73,7 +94,7 @@ export function registerForumTools(server: McpServer): void {
       description:
         "Full-text search across the Roblox Developer Forum. Use this first when a Roblox bug, error message, or engine behaviour needs community context: paste the literal error string (e.g. \"502: API Services rejected request\") or a symptom description. Results are re-ranked to favour solved and recent threads. Follow up with get_thread on the topic_id you want to read.",
       inputSchema: {
-        query: z.string().min(2).describe("Search text. Literal error messages and API names work best."),
+        query: querySchema,
         category: categoryEnum.optional().describe("Restrict to one category slug, e.g. scripting-support, engine-bugs, release-notes."),
         tags: z.array(z.string()).max(5).optional().describe("Restrict to DevForum tags, e.g. [\"datastore\"]."),
         solved_only: z.boolean().default(false).describe("Only threads with an accepted answer."),
@@ -87,8 +108,8 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const { topics, posts } = await search({
-          query: args.query,
+        const queries = asList(args.query);
+        const { topics, posts, matchedBy } = await runQueries(queries, {
           category: args.category,
           tags: args.tags,
           solvedOnly: args.solved_only,
@@ -96,12 +117,16 @@ export function registerForumTools(server: McpServer): void {
           after: args.after,
           order: args.order,
         });
+        const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
-          return ok(`No DevForum threads matched "${args.query}". Try fewer words, the raw error text, or drop the filters.`);
+          return ok(`No DevForum threads matched ${label}. Try fewer words, the raw error text, or drop the filters.`);
         }
         const ranked = rank(topics, posts, args.order !== "relevance").slice(0, args.limit);
-        const body = ranked.map((r, i) => topicLine(i + 1, r.topic, r.post)).join("\n\n");
-        return ok(truncate(`${ranked.length} DevForum threads for "${args.query}":\n\n${body}`, args.max_tokens, "narrow the query"));
+        const body = ranked
+          .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
+          .join("\n\n");
+        const head = `${ranked.length} DevForum threads for ${label}${queries.length > 1 ? ` (${queries.length} phrasings merged)` : ""}:`;
+        return ok(truncate(`${head}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_devforum failed", err);
       }
@@ -115,7 +140,7 @@ export function registerForumTools(server: McpServer): void {
       description:
         "Search only the DevForum bug-report categories (engine, Studio, cloud services, mobile, website, Creator Hub, purchasing). Use this to answer \"is this a known Roblox bug or is it my code?\" — results carry the staff status tag (confirmed / fixed / cannot-reproduce) and last-activity date.",
       inputSchema: {
-        query: z.string().min(2).describe("Error text or symptom, e.g. \"DataStore 502 API Services rejected request\"."),
+        query: querySchema,
         area: categoryEnum.optional().describe("Narrow to a single bug category, e.g. engine-bugs or studio-bugs."),
         after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Only reports active after this date (YYYY-MM-DD)."),
         limit: z.number().int().min(1).max(25).default(8),
@@ -125,19 +150,22 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const { topics, posts } = await search({
-          query: args.query,
+        const queries = asList(args.query);
+        const { topics, posts, matchedBy } = await runQueries(queries, {
           category: args.area ?? BUG_PARENT,
           after: args.after,
         });
+        const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
           return ok(
-            `No bug reports matched "${args.query}". That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
+            `No bug reports matched ${label}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
         const ranked = rank(topics, posts).slice(0, args.limit);
-        const body = ranked.map((r, i) => topicLine(i + 1, r.topic, r.post)).join("\n\n");
-        const header = `${ranked.length} bug reports for "${args.query}" (status tag shown in brackets when Roblox staff triaged it):`;
+        const body = ranked
+          .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
+          .join("\n\n");
+        const header = `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it):`;
         return ok(truncate(`${header}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_bugs failed", err);

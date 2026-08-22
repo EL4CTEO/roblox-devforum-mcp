@@ -51,8 +51,8 @@ node dist/index.js
 
 | Tool | What it does |
 | --- | --- |
-| `search_devforum` | Full-text DevForum search with category, tag, solved-only, minimum-likes and date filters. Results are re-ranked so solved and recent threads beat stale unanswered ones. |
-| `search_bugs` | Searches only the bug-report categories and surfaces the staff status tag (`confirmed`, `fixed`, `cannot-reproduce`) — answers "is this a known Roblox bug or is it my code?". |
+| `search_devforum` | Full-text DevForum search with category, tag, solved-only, minimum-likes and date filters. Pass an array of phrasings to run up to 5 searches in parallel and merge them. Results are re-ranked so solved and recent threads beat stale unanswered ones. |
+| `search_bugs` | Searches only the bug-report categories and surfaces the staff status tag (`confirmed`, `fixed`, `cannot-reproduce`) — answers "is this a known Roblox bug or is it my code?". Accepts parallel phrasings too. |
 | `get_thread` | Reads a topic as Markdown with the accepted answer hoisted to the top, staff replies next, and code blocks preserved. Accepts a topic id or a DevForum URL. |
 | `get_replies` | Pages through the rest of a long thread. |
 | `list_recent` | Latest or top topics in a category or tag — e.g. `release-notes` to check whether a Roblox update caused a regression. |
@@ -78,6 +78,22 @@ A typical agent loop: `search_bugs` with the literal error text → `search_devf
 workarounds → `get_thread` on the best hit → `get_engine_api` to confirm the API before editing
 code.
 
+### Parallel search
+
+An error rarely has one phrasing. Pass several and they run at once, merged and de-duplicated,
+with threads found by more than one phrasing promoted to the top:
+
+```json
+{ "query": ["DataStore 502 API Services rejected request",
+            "datastore internal server error",
+            "SetAsync failing 502"] }
+```
+
+```
+1. [solved] DataStore 502 API Rejected for specific key
+   #cloud-services-bugs · 4 replies · 1 yr ago · matched 3 phrasings
+```
+
 ## Configuration
 
 Everything is optional.
@@ -88,7 +104,8 @@ Everything is optional.
 | `DEVFORUM_CACHE_TTL` | `300` | Search cache lifetime in seconds (threads 15 min, categories and docs 24 h). |
 | `DEVFORUM_TIMEOUT_MS` | `12000` | Per-request timeout. |
 | `DEVFORUM_MAX_RETRIES` | `3` | Retries on 429/5xx, with jittered backoff. |
-| `DEVFORUM_CONCURRENCY` | `4` | Maximum simultaneous upstream requests. |
+| `DEVFORUM_CONCURRENCY` | `4` | Maximum simultaneous requests to the DevForum. |
+| `DEVFORUM_CDN_CONCURRENCY` | `8` | Maximum simultaneous requests to GitHub-hosted docs (a static CDN, so a higher ceiling is safe). |
 | `DEVFORUM_DOCS_SCAN` | `14` | Documentation pages downloaded and content-scored per search. |
 | `GITHUB_TOKEN` | — | Optional; raises the GitHub rate limit used to list the docs file tree. |
 | `DEVFORUM_CACHE_DIR` | OS temp dir | Where the API dump and docs index are cached between sessions. |

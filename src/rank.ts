@@ -30,6 +30,46 @@ function ageYears(iso: string | undefined): number {
 }
 
 /**
+ * Merge several independent result sets into one, de-duplicated by topic.
+ *
+ * A topic keeps its best position across the queries that found it, and topics matched by
+ * more than one query are promoted — agreement between phrasings is a strong signal that a
+ * thread is really about the problem.
+ */
+export function mergeResults(
+  sets: Array<{ query: string; topics: RawTopic[]; posts: RawPost[] }>,
+): { topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]> } {
+  const best = new Map<number, { topic: RawTopic; position: number }>();
+  const matchedBy = new Map<number, string[]>();
+  const posts: RawPost[] = [];
+  const seenPosts = new Set<number>();
+
+  for (const set of sets) {
+    set.topics.forEach((topic, index) => {
+      const previous = best.get(topic.id);
+      if (!previous || index < previous.position) best.set(topic.id, { topic, position: index });
+      const queries = matchedBy.get(topic.id) ?? [];
+      if (!queries.includes(set.query)) queries.push(set.query);
+      matchedBy.set(topic.id, queries);
+    });
+    for (const post of set.posts) {
+      if (seenPosts.has(post.id)) continue;
+      seenPosts.add(post.id);
+      posts.push(post);
+    }
+  }
+
+  const topics = [...best.values()]
+    .sort((a, b) => {
+      const agreement = (matchedBy.get(b.topic.id)?.length ?? 1) - (matchedBy.get(a.topic.id)?.length ?? 1);
+      return agreement || a.position - b.position;
+    })
+    .map((entry) => entry.topic);
+
+  return { topics, posts, matchedBy };
+}
+
+/**
  * Search hits arrive in Discourse relevance order; blend in signals that matter for
  * debugging so a solved 2025 thread outranks an unanswered 2018 one.
  */
