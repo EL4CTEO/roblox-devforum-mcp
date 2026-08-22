@@ -19,7 +19,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { bugStatus, mergeResults, rank } from "../rank.js";
+import { bugStatus, likesOf, mergeResults, rank } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 const CATEGORY_SLUGS = Object.keys(CATEGORIES) as Array<keyof typeof CATEGORIES>;
@@ -32,7 +32,7 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: s
   const badge = status ? `[${status}] ` : "";
   const meta = [
     `#${categoryName(topic.category_id)}`,
-    `${topic.like_count ?? 0} likes`,
+    `${likesOf(topic, post)} likes`,
     `${topic.reply_count ?? Math.max((topic.posts_count ?? 1) - 1, 0)} replies`,
     relativeDate(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at),
   ];
@@ -86,6 +86,21 @@ async function runQueries(
 
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
 
+/**
+ * Discourse accepts `min_post_likes:` but does not actually enforce it — a search for
+ * min_post_likes:100 still returns posts with three likes — so the floor is applied here.
+ */
+function applyMinLikes(topics: RawTopic[], posts: RawPost[], minLikes: number | undefined): RawTopic[] {
+  if (!minLikes || minLikes <= 0) return topics;
+  const best = new Map<number, number>();
+  for (const post of posts) {
+    if (post.topic_id === undefined) continue;
+    const likes = post.like_count ?? post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
+    best.set(post.topic_id, Math.max(best.get(post.topic_id) ?? 0, likes));
+  }
+  return topics.filter((t) => Math.max(t.like_count ?? 0, best.get(t.id) ?? 0) >= minLikes);
+}
+
 export function registerForumTools(server: McpServer): void {
   server.registerTool(
     "search_devforum",
@@ -109,7 +124,7 @@ export function registerForumTools(server: McpServer): void {
     async (args) => {
       try {
         const queries = asList(args.query);
-        const { topics, posts, matchedBy } = await runQueries(queries, {
+        const { topics: found, posts, matchedBy } = await runQueries(queries, {
           category: args.category,
           tags: args.tags,
           solvedOnly: args.solved_only,
@@ -117,9 +132,13 @@ export function registerForumTools(server: McpServer): void {
           after: args.after,
           order: args.order,
         });
+        const topics = applyMinLikes(found, posts, args.min_likes);
         const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
-          return ok(`No DevForum threads matched ${label}. Try fewer words, the raw error text, or drop the filters.`);
+          const floor = args.min_likes
+            ? ` ${found.length > 0 ? `${found.length} threads matched the text but none reached` : "Nothing reached"} ${args.min_likes}+ likes — lower min_likes.`
+            : " Try fewer words, the raw error text, or drop the filters.";
+          return ok(`No DevForum threads matched ${label}.${floor}`);
         }
         const ranked = rank(topics, posts, args.order !== "relevance", matchedBy).slice(0, args.limit);
         const body = ranked
@@ -213,7 +232,7 @@ export function registerForumTools(server: McpServer): void {
           [
             `#${categoryName(topic.category_id)}`,
             status ? `status: ${status}` : undefined,
-            `${topic.like_count ?? 0} likes`,
+            `${topic.like_count ?? 0} likes`, // the topic endpoint does return like_count
             `${topic.posts_count ?? all.length} posts`,
             `${topic.views ?? 0} views`,
             `created ${relativeDate(topic.created_at)}`,

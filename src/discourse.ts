@@ -128,6 +128,7 @@ export interface RawPost {
   score?: number;
   reply_count?: number;
   accepted_answer?: boolean;
+  like_count?: number;
   staff?: boolean;
   admin?: boolean;
   moderator?: boolean;

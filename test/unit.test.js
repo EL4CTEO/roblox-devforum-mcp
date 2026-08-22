@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { htmlToMarkdown, truncate, relativeDate, decodeEntities } from "../dist/format.js";
 import { buildSearchQuery, topicUrl, categoryName } from "../dist/discourse.js";
-import { rank, bugStatus } from "../dist/rank.js";
+import { rank, bugStatus, likesOf } from "../dist/rank.js";
 import { parseTopicId } from "../dist/tools/util.js";
 import { docUrl, signature, securityOf, queryTerms, scorePath } from "../dist/docs.js";
 
@@ -246,4 +246,14 @@ test("htmlToMarkdown keeps quotes only when asked", () => {
   assert.match(htmlToMarkdown(html, { keepQuotes: true }), /real recap intro/);
   assert.match(htmlToMarkdown(html), /\[quoted earlier reply\]/);
   assert.doesNotMatch(htmlToMarkdown(html), /real recap intro/);
+});
+
+test("likesOf falls back to the matched post when search omits topic likes", () => {
+  assert.equal(likesOf({ id: 1, title: "t", like_count: 12 }, { id: 2, post_number: 1, like_count: 3 }), 12);
+  assert.equal(likesOf({ id: 1, title: "t" }, { id: 2, post_number: 1, like_count: 8 }), 8);
+  assert.equal(
+    likesOf({ id: 1, title: "t" }, { id: 2, post_number: 1, actions_summary: [{ id: 2, count: 5 }] }),
+    5,
+  );
+  assert.equal(likesOf({ id: 1, title: "t" }), 0);
 });

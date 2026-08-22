@@ -11,6 +11,14 @@ export interface Ranked {
 const SOLVED_TAGS = new Set(["solved", "fixed", "confirmed", "resolved"]);
 const DEAD_TAGS = new Set(["cannot-reproduce", "duplicate", "not-a-bug", "invalid", "by-design"]);
 
+/**
+ * Likes for a topic. Discourse omits `like_count` from search results entirely — it is only
+ * present on category listings — so the matched post's own count is the fallback.
+ */
+export function likesOf(topic: RawTopic, post?: RawPost): number {
+  return topic.like_count ?? post?.like_count ?? post?.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
+}
+
 /** Triage status taken only from the topic's own tags — no inference. */
 function tagStatus(topic: RawTopic): string | undefined {
   return (topic.tags ?? [])
@@ -109,7 +117,7 @@ export function rank(
     // accepted answer is worth (+45), and past ~6 years nothing outranks a current thread.
     const bumpedAge = ageYears(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at);
     score -= Math.min(bumpedAge * 15, 85);
-    score += Math.min((topic.like_count ?? 0) * 1.5, 25);
+    score += Math.min(likesOf(topic, post) * 1.5, 25);
     score += Math.min((topic.reply_count ?? 0) * 0.8, 15);
     if ((topic.posts_count ?? 0) <= 1) score -= 8; // nobody ever replied
 

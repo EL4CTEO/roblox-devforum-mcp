@@ -131,6 +131,11 @@ export function registerDocsTools(server: McpServer): void {
 
             const found = await resolveMember(cls.Name, memberName);
             if (!found) {
+              // Constructors like Instance.new or Color3.fromRGB are Luau library functions,
+              // not class members, so the dump has no entry for them.
+              if (/^(new|from[A-Z]\w*)$/.test(memberName)) {
+                return `OK        ${entry} — constructor, not a class member; it is not listed in the API dump.`;
+              }
               const near = await suggestMembers(cls.Name, memberName);
               return `NOT FOUND ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
             }
