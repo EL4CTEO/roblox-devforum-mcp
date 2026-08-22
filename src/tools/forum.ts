@@ -39,7 +39,13 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: s
   if (topic.tags?.length) meta.push(topic.tags.slice(0, 4).join(", "));
   if (matchedBy && matchedBy.length > 1) meta.push(`matched ${matchedBy.length} phrasings`);
 
-  const blurb = post?.blurb ? `\n   ${decodeEntities(post.blurb).replace(/\s+/g, " ").slice(0, 260)}` : "";
+  // Discourse returns whichever post matched, often a reply deep in the thread. Saying so
+  // stops the excerpt reading as a summary of the topic — "Github link is broken, is this
+  // defunct?" is a reply, not what the resource thread is about.
+  const from = post && post.post_number > 1 ? `reply #${post.post_number}: ` : "";
+  const blurb = post?.blurb
+    ? `\n   ${from}${decodeEntities(post.blurb).replace(/\s+/g, " ").slice(0, 260)}`
+    : "";
   return [
     `${index}. ${badge}${topic.title}`,
     `   ${meta.join(" · ")}`,

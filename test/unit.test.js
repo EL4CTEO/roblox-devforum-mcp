@@ -257,3 +257,32 @@ test("likesOf falls back to the matched post when search omits topic likes", () 
   );
   assert.equal(likesOf({ id: 1, title: "t" }), 0);
 });
+
+test("htmlToMarkdown pulls stranded heading and list markers back onto their text", () => {
+  const html =
+    '<h2><a name="p-1-news" class="anchor" href="#p-1-news"></a>\nNews &amp; Alerts</h2>' +
+    "<ul><li>\nWe shared a PSA</li></ul>";
+  const md = htmlToMarkdown(html);
+  assert.match(md, /^## News & Alerts$/m);
+  assert.match(md, /^- We shared a PSA$/m);
+  assert.doesNotMatch(md, /^##\s*$/m, "no bare heading marker on its own line");
+  assert.doesNotMatch(md, /^-\s*$/m, "no bare list marker on its own line");
+});
+
+// Live check: guards against list_categories advertising a slug the enum rejects, and warns
+// when Roblox adds a category. Skipped rather than failed when the forum is unreachable.
+test("every category the forum exposes is accepted as a filter slug", async (t) => {
+  const { listCategories, CATEGORIES, categoryPath } = await import("../dist/discourse.js");
+  let tree;
+  try {
+    tree = await listCategories();
+  } catch {
+    return t.skip("DevForum unreachable");
+  }
+  const advertised = tree.flatMap((c) => [c.slug, ...c.subcategories.map((s) => s.slug)]);
+  const missing = advertised.filter((slug) => !(slug in CATEGORIES));
+  assert.deepEqual(missing, [], "list_categories must not advertise slugs the enum rejects");
+  for (const slug of advertised) {
+    assert.match(categoryPath(slug), /^[a-z0-9/-]+\/\d+$/, `${slug} must build a canonical path`);
+  }
+});

@@ -67,13 +67,19 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
 
   s = decodeEntities(stripTags(s));
 
-  return s
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/g, ""))
-    .filter((line) => line.trim() !== ">") // leftover blockquote markers from unwrapped quotes
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return (
+    s
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+$/g, ""))
+      .filter((line) => line.trim() !== ">") // leftover blockquote markers from unwrapped quotes
+      .join("\n")
+      // Discourse puts a newline between a heading's anchor and its text, and between a list
+      // marker and its content. Once the anchor is stripped that leaves a bare "##" or "-"
+      // stranded on its own line, so pull the text back up onto the marker.
+      .replace(/^(#{1,6}|[-*])[ \t]*\n+[ \t]*(?=\S)/gm, "$1 ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 function stripTags(input: string): string {

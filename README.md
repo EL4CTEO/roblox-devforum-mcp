@@ -56,7 +56,7 @@ node dist/index.js
 | `get_thread` | Reads a topic as Markdown with the accepted answer hoisted to the top, staff replies next, and code blocks preserved. Accepts a topic id or a DevForum URL. |
 | `get_replies` | Pages through the rest of a long thread. |
 | `list_recent` | Latest or top topics in a category or tag — e.g. `release-notes` to check whether a Roblox update caused a regression. |
-| `list_categories` | The category tree and most-used tags, so the model can pick valid filter slugs. |
+| `list_categories` | The full category tree and most-used tags. Every slug it lists is accepted as a `category` / `area` filter. |
 | `search_creator_docs` | Searches create.roblox.com documentation by page content (not just titles) and returns snippets; pass `path` to read a full page. |
 | `get_engine_api` | Signatures, security levels, deprecations and thread safety straight from the live Roblox API dump. |
 | `check_api_health` | Batch-check APIs before shipping Luau: still exists? deprecated (with the official replacement)? security-gated? yields? Catches retired APIs that models still emit. |
