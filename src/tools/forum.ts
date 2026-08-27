@@ -215,33 +215,40 @@ export function registerForumTools(server: McpServer): void {
 
         // A sentence-shaped symptom can match nothing while its keywords match a triaged
         // report, and answering "not a known engine bug" to that is worse than no answer.
+        // Broadening is per phrasing: one phrasing matching something weakly must not
+        // suppress the retry for a phrasing that matched nothing, or adding a phrasing
+        // makes the results worse than asking with one.
+        const matched = new Set([...matchedBy.values()].flat());
+        const pairs = queries
+          .filter((q) => !matched.has(q))
+          .map((q) => [q, broaden(q)] as const)
+          .filter((pair): pair is readonly [string, string] => Boolean(pair[1]));
+        const alts = [...new Set(pairs.map(([, trimmed]) => trimmed))];
         let broadened: string[] | undefined;
-        if (topics.length === 0) {
-          const alts = queries.map(broaden).filter((q): q is string => Boolean(q));
-          if (alts.length > 0) {
-            const retry = await runQueries([...new Set(alts)], base);
-            if (retry.topics.length > 0) {
-              ({ topics, posts, matchedBy } = retry);
-              broadened = [...new Set(alts)];
-            }
+        if (alts.length > 0) {
+          // The original phrasings are re-run from cache, so the merge keeps agreement counts.
+          const retry = await runQueries([...queries, ...alts], base);
+          if (retry.topics.length > topics.length) {
+            ({ topics, posts, matchedBy } = retry);
+            broadened = alts;
           }
         }
 
         if (topics.length === 0) {
+          const tried = alts.length > 0 ? ", with or without its less distinctive words" : "";
           return ok(
-            `No bug reports matched ${label}, with or without its less distinctive words. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
+            `No bug reports matched ${label}${tried}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
         const ranked = rank(topics, posts, false, matchedBy).slice(0, args.limit);
-        const searched = broadened ? broadened.map((q) => `"${q}"`).join(" / ") : label;
+        const phrasings = broadened ? queries.length + broadened.length : queries.length;
         const body = ranked
-          .map((r, i) =>
-            topicLine(i + 1, r.topic, r.post, (broadened ?? queries).length > 1 ? matchedBy.get(r.topic.id) : undefined),
-          )
+          .map((r, i) => topicLine(i + 1, r.topic, r.post, phrasings > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
-        const header = broadened
-          ? `Nothing matched ${label} exactly. ${ranked.length} bug reports for the broader ${searched} (status tag shown in brackets when Roblox staff triaged it):`
-          : `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it):`;
+        const widened = broadened
+          ? ` ${pairs.map(([asked, trimmed]) => `"${asked}" matched nothing as written, so "${trimmed}" was searched too`).join("; ")}.`
+          : "";
+        const header = `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it).${widened}`;
         return ok(truncate(`${header}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_bugs failed", err);
