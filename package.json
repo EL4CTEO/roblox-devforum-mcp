@@ -1,18 +1,46 @@
 {
   "name": "roblox-devforum-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server that searches the Roblox DevForum and official creator docs so AI coding agents can debug Roblox games against real community and engine knowledge.",
-  "keywords": ["mcp", "mcp-server", "model-context-protocol", "roblox", "roblox-studio", "roblox-development", "devforum", "luau", "ai", "ai-agents", "llm", "claude", "claude-code", "game-development"],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "roblox",
+    "roblox-studio",
+    "roblox-development",
+    "devforum",
+    "luau",
+    "ai",
+    "ai-agents",
+    "llm",
+    "claude",
+    "claude-code",
+    "game-development"
+  ],
   "license": "MIT",
   "author": "EL4CTEO",
-  "repository": { "type": "git", "url": "git+https://github.com/EL4CTEO/roblox-devforum-mcp.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EL4CTEO/roblox-devforum-mcp.git"
+  },
   "homepage": "https://github.com/EL4CTEO/roblox-devforum-mcp#readme",
-  "bugs": { "url": "https://github.com/EL4CTEO/roblox-devforum-mcp/issues" },
+  "bugs": {
+    "url": "https://github.com/EL4CTEO/roblox-devforum-mcp/issues"
+  },
   "type": "module",
-  "bin": { "roblox-devforum-mcp": "dist/index.js" },
+  "bin": {
+    "roblox-devforum-mcp": "dist/index.js"
+  },
   "main": "dist/index.js",
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
