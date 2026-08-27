@@ -286,3 +286,39 @@ test("every category the forum exposes is accepted as a filter slug", async (t) 
     assert.match(categoryPath(slug), /^[a-z0-9/-]+\/\d+$/, `${slug} must build a canonical path`);
   }
 });
+
+test("splitApiEntry keeps the member when Luau writes it with a colon", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+
+  // The colon form used to be cut at the ":", so a deprecated member reported "OK, class X".
+  assert.deepEqual(splitApiEntry("Humanoid:LoadAnimation"), {
+    raw: "Humanoid.LoadAnimation",
+    className: "Humanoid",
+    memberName: "LoadAnimation",
+  });
+  assert.deepEqual(splitApiEntry("game:GetService(\"DataStoreService\")"), {
+    raw: "DataModel.GetService",
+    className: "DataModel",
+    memberName: "GetService",
+  });
+  // `game` is the DataModel, not a prefix to throw away.
+  assert.equal(splitApiEntry("game").className, "DataModel");
+  assert.equal(splitApiEntry("game.HttpGet").className, "DataModel");
+  // The class is the segment the member hangs off, so instance paths still resolve.
+  assert.deepEqual(splitApiEntry("game.Workspace.Terrain"), {
+    raw: "DataModel.Workspace.Terrain",
+    className: "Workspace",
+    memberName: "Terrain",
+  });
+  assert.deepEqual(splitApiEntry("BodyVelocity"), { raw: "BodyVelocity", className: "BodyVelocity" });
+  assert.equal(splitApiEntry("Enum.RaycastFilterType").raw, "Enum.RaycastFilterType");
+});
+
+test("broaden trims a symptom sentence to its distinctive words", async () => {
+  const { broaden } = await import("../dist/tools/forum.js");
+
+  assert.equal(broaden("ProximityPrompt not triggering on mobile"), "ProximityPrompt triggering");
+  // Nothing to gain when the query is already short or is all filler.
+  assert.equal(broaden("ProximityPrompt mobile"), undefined);
+  assert.equal(broaden("why is it not working"), undefined);
+});

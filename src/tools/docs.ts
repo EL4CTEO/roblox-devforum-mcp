@@ -23,6 +23,29 @@ import { ok, fail, toToolError } from "./util.js";
 
 const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
 
+/**
+ * Split a check_api_health entry into the class and member it asks about.
+ *
+ * Luau writes method calls with a colon — "Humanoid:LoadAnimation", "game:GetService(...)" —
+ * and `game` is the DataModel. Cutting the entry at the colon threw the member away, so
+ * "Humanoid:LoadAnimation" answered "OK, class Humanoid" for a deprecated API; stripping the
+ * "game." prefix left the member to be looked up as a class, so game:GetService reported
+ * NOT FOUND. The class is the segment the member hangs off, so a path like
+ * "game.Workspace.Terrain" still asks about Workspace.Terrain.
+ */
+export function splitApiEntry(entry: string): { raw: string; className: string; memberName?: string } {
+  const raw = entry
+    .trim()
+    .replace(/\(.*$/, "")
+    .replace(/:/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/^game(?=\.|$)/i, "DataModel");
+  const segments = raw.split(".").filter(Boolean);
+  const memberName = segments.length > 1 ? segments[segments.length - 1] : undefined;
+  const className = (segments.length > 1 ? segments[segments.length - 2] : segments[0]) ?? raw;
+  return memberName === undefined ? { raw, className } : { raw, className, memberName };
+}
+
 export function registerDocsTools(server: McpServer): void {
   server.registerTool(
     "search_creator_docs",
@@ -87,7 +110,7 @@ export function registerDocsTools(server: McpServer): void {
       try {
         const lines = await Promise.all(
           args.members.map(async (entry) => {
-            const raw = entry.trim().replace(/^game[.:]/i, "").replace(/[():].*$/, "");
+            const { raw, className, memberName } = splitApiEntry(entry);
 
             // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
             const enumMatch = /^Enum\.([A-Za-z0-9_]+)/.exec(raw);
@@ -97,10 +120,6 @@ export function registerDocsTools(server: McpServer): void {
                 ? `OK        ${entry} — Enum.${enumType.Name} exists (${enumType.Items?.length ?? 0} items).`
                 : `NOT FOUND ${entry} — no Enum named "${enumMatch[1]}".`;
             }
-
-            const dot = raw.lastIndexOf(".");
-            const className = dot > 0 ? raw.slice(0, dot) : raw;
-            const memberName = dot > 0 ? raw.slice(dot + 1) : undefined;
 
             const cls = await findClass(className);
             if (!cls) {

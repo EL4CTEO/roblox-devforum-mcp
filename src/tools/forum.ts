@@ -30,9 +30,16 @@ const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: fa
 function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: string[]): string {
   const status = bugStatus(topic);
   const badge = status ? `[${status}] ` : "";
+  // Search payloads carry no topic like_count, so the number is the matched post's and
+  // changes with whichever post matched. Say which it is rather than letting the same
+  // thread report "1 likes" in one search and "0 likes" in the next.
+  const likes =
+    topic.like_count === undefined && post
+      ? `${likesOf(topic, post)} likes on the matched post`
+      : `${likesOf(topic, post)} likes`;
   const meta = [
     `#${categoryName(topic.category_id)}`,
-    `${likesOf(topic, post)} likes`,
+    likes,
     `${topic.reply_count ?? Math.max((topic.posts_count ?? 1) - 1, 0)} replies`,
     relativeDate(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at),
   ];
@@ -91,6 +98,32 @@ async function runQueries(
 }
 
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
+
+/** Words that carry no weight in a Discourse index but still narrow an AND-ed query. */
+const FILLER = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "not", "no", "on", "in", "at", "to",
+  "of", "for", "and", "or", "but", "my", "me", "i", "it", "its", "this", "that", "when", "why",
+  "how", "does", "doesnt", "dont", "cant", "with", "without", "after", "before", "from", "any",
+  "some", "get", "getting", "still", "keep", "keeps", "randomly", "sometimes", "issue", "problem",
+]);
+
+/**
+ * Discourse ANDs every term, so a natural symptom sentence can match nothing at all while
+ * its two distinctive words find the report you wanted: "ProximityPrompt not triggering on
+ * mobile" returned zero bug reports, "ProximityPrompt mobile" returned the staff-answered
+ * OnePerButton one. Used only after a search comes back empty.
+ */
+export function broaden(query: string): string | undefined {
+  const words = query
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\w'-]/g, ""))
+    .filter(Boolean);
+  const kept = words.filter((w) => !FILLER.has(w.toLowerCase()));
+  if (kept.length < 3) return undefined;
+  const distinctive = new Set([...kept].sort((a, b) => b.length - a.length).slice(0, 2));
+  const trimmed = kept.filter((w) => distinctive.has(w)).join(" ");
+  return trimmed && trimmed !== query.trim() ? trimmed : undefined;
+}
 
 /**
  * Discourse accepts `min_post_likes:` but does not actually enforce it — a search for
@@ -176,21 +209,39 @@ export function registerForumTools(server: McpServer): void {
     async (args) => {
       try {
         const queries = asList(args.query);
-        const { topics, posts, matchedBy } = await runQueries(queries, {
-          category: args.area ?? BUG_PARENT,
-          after: args.after,
-        });
+        const base = { category: args.area ?? BUG_PARENT, after: args.after };
+        let { topics, posts, matchedBy } = await runQueries(queries, base);
         const label = queries.map((q) => `"${q}"`).join(" / ");
+
+        // A sentence-shaped symptom can match nothing while its keywords match a triaged
+        // report, and answering "not a known engine bug" to that is worse than no answer.
+        let broadened: string[] | undefined;
+        if (topics.length === 0) {
+          const alts = queries.map(broaden).filter((q): q is string => Boolean(q));
+          if (alts.length > 0) {
+            const retry = await runQueries([...new Set(alts)], base);
+            if (retry.topics.length > 0) {
+              ({ topics, posts, matchedBy } = retry);
+              broadened = [...new Set(alts)];
+            }
+          }
+        }
+
         if (topics.length === 0) {
           return ok(
-            `No bug reports matched ${label}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
+            `No bug reports matched ${label}, with or without its less distinctive words. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
         const ranked = rank(topics, posts, false, matchedBy).slice(0, args.limit);
+        const searched = broadened ? broadened.map((q) => `"${q}"`).join(" / ") : label;
         const body = ranked
-          .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
+          .map((r, i) =>
+            topicLine(i + 1, r.topic, r.post, (broadened ?? queries).length > 1 ? matchedBy.get(r.topic.id) : undefined),
+          )
           .join("\n\n");
-        const header = `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it):`;
+        const header = broadened
+          ? `Nothing matched ${label} exactly. ${ranked.length} bug reports for the broader ${searched} (status tag shown in brackets when Roblox staff triaged it):`
+          : `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it):`;
         return ok(truncate(`${header}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_bugs failed", err);
