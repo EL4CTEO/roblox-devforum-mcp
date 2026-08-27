@@ -179,11 +179,32 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
   return enriched.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
+/**
+ * Resolve a caller-supplied repo path, keeping it inside the documentation root.
+ *
+ * The segments are resolved here rather than left to the CDN: "../../README.md" walked out
+ * of content/en-us and returned the repository's own README under a nonsense
+ * "create.roblox.com/docs/../../README" URL, which is not a page an agent should be citing.
+ */
+export function resolveDocPath(path: string): string {
+  const clean = path.trim().replace(/^\/+/, "");
+  const full = clean.startsWith(DOCS_ROOT) ? clean : `${DOCS_ROOT}${clean}`;
+  const parts: string[] = [];
+  for (const segment of full.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  const resolved = parts.join("/");
+  if (!resolved.startsWith(DOCS_ROOT) || resolved.length === DOCS_ROOT.length) {
+    throw new Error(`"${path}" is outside the documentation tree — paths start with ${DOCS_ROOT}`);
+  }
+  return resolved;
+}
+
 /** Fetch a documentation page source (Markdown guide or reference YAML). */
 export async function fetchDoc(path: string): Promise<string> {
-  const clean = path.replace(/^\/+/, "");
-  const full = clean.startsWith(DOCS_ROOT) ? clean : `${DOCS_ROOT}${clean}`;
-  return getText(RAW_BASE + full, TTL.static);
+  return getText(RAW_BASE + resolveDocPath(path), TTL.static);
 }
 
 /* ------------------------------- API dump -------------------------------- */

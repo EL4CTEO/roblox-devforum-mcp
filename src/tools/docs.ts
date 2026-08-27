@@ -15,6 +15,7 @@ import {
   suggestClasses,
   suggestMembers,
   resolveMember,
+  resolveDocPath,
   deprecationNote,
   type ApiMember,
 } from "../docs.js";
@@ -65,10 +66,10 @@ export function registerDocsTools(server: McpServer): void {
       if (!args.query && !args.path) return fail("Provide either `query` to search or `path` to read a page.");
       try {
         if (args.path) {
-          const text = await fetchDoc(args.path);
-          return ok(
-            `${docUrl(args.path.startsWith("content/en-us/") ? args.path : `content/en-us/${args.path}`)}\n\n${truncate(text, args.max_tokens, "read the page online")}`,
-          );
+          // Resolve once, so the URL printed as the source is the page actually fetched.
+          const resolved = resolveDocPath(args.path);
+          const text = await fetchDoc(resolved);
+          return ok(`${docUrl(resolved)}\n\n${truncate(text, args.max_tokens, "read the page online")}`);
         }
         const hits = await searchDocs(args.query as string, args.limit);
         if (hits.length === 0) {

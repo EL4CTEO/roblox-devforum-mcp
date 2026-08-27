@@ -373,3 +373,20 @@ test("renderWithin keeps whole posts inside the token budget", async () => {
   assert.ok(roomy.shown > tight.shown, "a larger budget must render more posts");
   assert.ok(roomy.body.length <= 4000 * 4 + 80);
 });
+
+test("resolveDocPath keeps caller paths inside the docs tree", async () => {
+  const { resolveDocPath } = await import("../dist/docs.js");
+  const ROOT = "content/en-us/";
+
+  // Accepts the forms a caller actually has: with the prefix, without it, leading slash.
+  assert.equal(resolveDocPath("cloud-services/data-stores/index.md"), `${ROOT}cloud-services/data-stores/index.md`);
+  assert.equal(resolveDocPath("/cloud-services/data-stores/index.md"), `${ROOT}cloud-services/data-stores/index.md`);
+  assert.equal(resolveDocPath(`${ROOT}reference/engine/classes/DataStoreService.yaml`), `${ROOT}reference/engine/classes/DataStoreService.yaml`);
+  assert.equal(resolveDocPath("guides/./intro.md"), `${ROOT}guides/intro.md`);
+
+  // "../../README.md" used to walk out of the docs root and return the repository's own
+  // README under a nonsense create.roblox.com/docs/../../README URL.
+  assert.throws(() => resolveDocPath("../../README.md"), /outside the documentation tree/);
+  assert.throws(() => resolveDocPath(`${ROOT}../../README.md`), /outside the documentation tree/);
+  assert.throws(() => resolveDocPath("../"), /outside the documentation tree/);
+});
