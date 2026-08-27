@@ -52,7 +52,7 @@ node dist/index.js
 | Tool | What it does |
 | --- | --- |
 | `search_devforum` | Full-text DevForum search with category, tag, solved-only, minimum-likes and date filters. Pass an array of phrasings to run up to 5 searches in parallel and merge them. Results are re-ranked so solved and recent threads beat stale unanswered ones. |
-| `search_bugs` | Searches only the bug-report categories and surfaces the staff status tag (`confirmed`, `fixed`, `cannot-reproduce`) — answers "is this a known Roblox bug or is it my code?". Accepts parallel phrasings too. |
+| `search_bugs` | Searches only the bug-report categories and surfaces the staff status tag (`confirmed`, `fixed`, `cannot-reproduce`) — answers "is this a known Roblox bug or is it my code?". Accepts parallel phrasings too. A phrasing that matches nothing is retried on its distinctive words, and the reply says so. |
 | `get_thread` | Reads a topic as Markdown with the accepted answer hoisted to the top, staff replies next, and code blocks preserved. Accepts a topic id or a DevForum URL. |
 | `get_replies` | Pages through the rest of a long thread. |
 | `list_recent` | Latest or top topics in a category or tag — e.g. `release-notes` to check whether a Roblox update caused a regression. |
