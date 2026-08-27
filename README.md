@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/EL4CTEO/roblox-devforum-mcp/main/assets/devforum.png" alt="Roblox Developer Forum" width="440">
+
 # roblox-devforum-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that gives an AI coding agent the **Roblox
