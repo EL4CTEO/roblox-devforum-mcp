@@ -69,6 +69,30 @@ export function isAutomated(post: RawPost): boolean {
   return /automatically closed|automatically deleted/i.test(post.cooked ?? "");
 }
 
+/** Smallest slice that still leaves a post worth reading. */
+const PER_POST_FLOOR = 120;
+
+/**
+ * Render posts inside a token budget.
+ *
+ * Only the per-post slice used to be budgeted, and it had this floor, so the assembled
+ * output was the floor times the post count: get_thread with max_posts 30 and max_tokens
+ * 300 returned about 1,700 tokens, near six times what was asked for. Fewer whole posts
+ * are worth more to a reader than many shredded ones, so the budget now decides how many
+ * are rendered, and the joined result is truncated as a hard guarantee.
+ */
+export function renderWithin(
+  posts: RawPost[],
+  topic: RawTopic,
+  budget: number,
+  hint: string,
+): { body: string; shown: number } {
+  const kept = posts.slice(0, Math.max(Math.floor(budget / PER_POST_FLOOR), 1));
+  const perPost = Math.max(Math.floor(budget / Math.max(kept.length, 1)), PER_POST_FLOOR);
+  const body = truncate(kept.map((p) => renderPost(p, topic, perPost)).join("\n\n"), budget, hint);
+  return { body, shown: kept.length };
+}
+
 function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   const author = post.username ?? post.name ?? "unknown";
   const role = post.staff || post.admin || post.moderator ? " (Roblox staff)" : "";
@@ -288,7 +312,6 @@ export function registerForumTools(server: McpServer): void {
           });
 
         const chosen = [first, accepted, ...rest].filter((p): p is RawPost => Boolean(p)).slice(0, args.max_posts);
-        const perPost = Math.max(Math.floor(args.max_tokens / Math.max(chosen.length, 1)), 120);
 
         const status = bugStatus(topic);
         const head = [
@@ -311,12 +334,17 @@ export function registerForumTools(server: McpServer): void {
           .join("\n");
 
         const stream = topic.post_stream?.stream ?? [];
+        // The head and footer come out of the same budget the caller asked for.
+        const { body, shown } = renderWithin(
+          chosen,
+          topic,
+          Math.max(args.max_tokens - 60, PER_POST_FLOOR),
+          `use get_replies with topic_id ${topicId}`,
+        );
         const footer =
-          stream.length > chosen.length
-            ? `\n\n(${stream.length - chosen.length} more replies — use get_replies with topic_id ${topicId}.)`
+          stream.length > shown
+            ? `\n\n(${stream.length - shown} more replies — use get_replies with topic_id ${topicId}.)`
             : "";
-
-        const body = chosen.map((p) => renderPost(p, topic, perPost)).join("\n\n");
         return ok(`${head}\n\n${body}${footer}`);
       } catch (err) {
         return toToolError(`get_thread(${topicId}) failed`, err);
@@ -358,10 +386,15 @@ export function registerForumTools(server: McpServer): void {
         const byId = new Map([...cached, ...fetched].map((p) => [p.id, p]));
         const posts = ids.map((id) => byId.get(id)).filter((p): p is RawPost => Boolean(p));
 
-        const perPost = Math.max(Math.floor(args.max_tokens / Math.max(posts.length, 1)), 120);
-        const body = posts.map((p) => renderPost(p, topic, perPost)).join("\n\n");
+        const { body, shown } = renderWithin(
+          posts,
+          topic,
+          Math.max(args.max_tokens - 30, PER_POST_FLOOR),
+          "raise max_tokens or lower limit",
+        );
         const total = Math.ceil(stream.length / args.limit);
-        return ok(`${topic.title} — replies page ${args.page}/${total}\n\n${body}`);
+        const short = shown < posts.length ? ` — ${shown} of ${posts.length} posts, raise max_tokens for the rest` : "";
+        return ok(`${topic.title} — replies page ${args.page}/${total}${short}\n\n${body}`);
       } catch (err) {
         return toToolError(`get_replies(${topicId}) failed`, err);
       }

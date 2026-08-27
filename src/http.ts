@@ -4,12 +4,33 @@ const UA =
   process.env.DEVFORUM_USER_AGENT ??
   "Mozilla/5.0 (compatible; roblox-devforum-mcp/1.0; +https://github.com/EL4CTEO/roblox-devforum-mcp)";
 
-const TIMEOUT_MS = Number(process.env.DEVFORUM_TIMEOUT_MS ?? 12_000);
-const MAX_RETRIES = Number(process.env.DEVFORUM_MAX_RETRIES ?? 3);
-const MAX_CONCURRENCY = Number(process.env.DEVFORUM_CONCURRENCY ?? 4);
+/**
+ * Read a numeric setting, falling back when the value is not a usable number.
+ *
+ * A bare Number() turned a typo into NaN and every comparison against it into false:
+ * DEVFORUM_CONCURRENCY=abc (or 0) left `active < limit` permanently false, so requests
+ * queued forever and the tool call never returned at all; a bad DEVFORUM_MAX_RETRIES
+ * failed every request with a generic "Request failed" that blamed the network. These are
+ * documented, user-set variables, so a mistyped one has to degrade to the default.
+ */
+export function envInt(name: string, fallback: number, min: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min) {
+    process.stderr.write(`[roblox-devforum-mcp] ignoring ${name}="${raw}", using ${fallback}\n`);
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+const TIMEOUT_MS = envInt("DEVFORUM_TIMEOUT_MS", 12_000, 100);
+const MAX_RETRIES = envInt("DEVFORUM_MAX_RETRIES", 3, 0);
+const MAX_CONCURRENCY = envInt("DEVFORUM_CONCURRENCY", 4, 1);
+const CDN_CONCURRENCY = envInt("DEVFORUM_CDN_CONCURRENCY", 8, 1);
 
 export const TTL = {
-  search: Number(process.env.DEVFORUM_CACHE_TTL ?? 300) * 1000,
+  search: envInt("DEVFORUM_CACHE_TTL", 300, 0) * 1000,
   thread: 900_000,
   static: 86_400_000,
 } as const;
@@ -68,7 +89,7 @@ export function clearCache(): void {
 const CDN_HOSTS = new Set(["raw.githubusercontent.com", "api.github.com"]);
 
 function limitFor(host: string): number {
-  return CDN_HOSTS.has(host) ? Number(process.env.DEVFORUM_CDN_CONCURRENCY ?? 8) : MAX_CONCURRENCY;
+  return CDN_HOSTS.has(host) ? CDN_CONCURRENCY : MAX_CONCURRENCY;
 }
 
 interface Gate {

@@ -1,7 +1,7 @@
 /** Official Roblox documentation: creator-docs sources + the engine API dump. */
 
 import { cachedJson } from "./cache.js";
-import { getGithubJson, getText, TTL } from "./http.js";
+import { envInt, getGithubJson, getText, TTL } from "./http.js";
 
 const DOCS_REPO = "Roblox/creator-docs";
 const DOCS_BRANCH = "main";
@@ -101,7 +101,7 @@ export function scorePath(path: string, terms: string[], compactQuery: string): 
 }
 
 /** How many candidate pages get their content downloaded and scored. */
-const SCAN_LIMIT = Number(process.env.DEVFORUM_DOCS_SCAN ?? 14);
+const SCAN_LIMIT = envInt("DEVFORUM_DOCS_SCAN", 14, 1);
 
 /** Drop YAML front matter and the boilerplate comment header so snippets start at real prose. */
 function stripPreamble(text: string): string {

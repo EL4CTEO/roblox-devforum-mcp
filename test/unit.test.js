@@ -322,3 +322,54 @@ test("broaden trims a symptom sentence to its distinctive words", async () => {
   assert.equal(broaden("ProximityPrompt mobile"), undefined);
   assert.equal(broaden("why is it not working"), undefined);
 });
+
+test("envInt falls back instead of poisoning comparisons with NaN", async () => {
+  const { envInt } = await import("../dist/http.js");
+  const KEY = "DEVFORUM_QA_PROBE";
+  const restore = process.env[KEY];
+
+  try {
+    delete process.env[KEY];
+    assert.equal(envInt(KEY, 4, 1), 4);
+    process.env[KEY] = "";
+    assert.equal(envInt(KEY, 4, 1), 4);
+    process.env[KEY] = "8";
+    assert.equal(envInt(KEY, 4, 1), 8);
+    // A NaN limit made "active < limit" permanently false, which queued every request
+    // forever; below-minimum values (0 concurrency) hung in exactly the same way.
+    process.env[KEY] = "abc";
+    assert.equal(envInt(KEY, 4, 1), 4);
+    process.env[KEY] = "0";
+    assert.equal(envInt(KEY, 4, 1), 4);
+    assert.equal(envInt(KEY, 300, 0), 0); // 0 is legitimate where the minimum allows it
+    process.env[KEY] = "-5";
+    assert.equal(envInt(KEY, 14, 1), 14);
+    process.env[KEY] = "2.7";
+    assert.equal(envInt(KEY, 4, 1), 2);
+  } finally {
+    if (restore === undefined) delete process.env[KEY];
+    else process.env[KEY] = restore;
+  }
+});
+
+test("renderWithin keeps whole posts inside the token budget", async () => {
+  const { renderWithin } = await import("../dist/tools/forum.js");
+  const topic = { id: 7, title: "long thread", category_id: 55 };
+  const posts = Array.from({ length: 30 }, (_, i) => ({
+    id: i + 1,
+    post_number: i + 1,
+    username: `dev${i}`,
+    created_at: new Date().toISOString(),
+    cooked: `<p>${"reply body ".repeat(80)}</p>`,
+  }));
+
+  // Budgeting only the per-post slice multiplied the 120-token floor by the post count,
+  // so 30 posts against a 300-token budget rendered roughly 1,700 tokens.
+  const tight = renderWithin(posts, topic, 300, "hint");
+  assert.ok(tight.shown < posts.length, "a small budget must render fewer posts, not shredded ones");
+  assert.ok(tight.body.length <= 300 * 4 + 80, `body was ${tight.body.length} chars for a 300-token budget`);
+
+  const roomy = renderWithin(posts, topic, 4000, "hint");
+  assert.ok(roomy.shown > tight.shown, "a larger budget must render more posts");
+  assert.ok(roomy.body.length <= 4000 * 4 + 80);
+});
