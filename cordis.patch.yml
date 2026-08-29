@@ -1,0 +1,15 @@
+# DeepSeek Harness bundle patch: run this MCP server inside a live Harness.
+#
+# dsh already speaks MCP through @deepseek-ai/dsh-mcp-client, so this file only has to say
+# how to start the server. Tools land in the registry as mcp__roblox-devforum__<tool>.
+#
+#   dsh plugin --profile web add github:EL4CTEO/roblox-devforum-mcp
+#   dsh --profile web
+- insert:
+    - id: roblox-devforum
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: roblox-devforum
+        transport: stdio
+        command: npx
+        args: ['-y', 'roblox-devforum-mcp']

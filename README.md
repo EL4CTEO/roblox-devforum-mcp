@@ -16,6 +16,12 @@ No API key, no login, no setup.
 claude mcp add roblox-devforum -- npx -y roblox-devforum-mcp
 ```
 
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
+
+```bash
+dsh plugin --profile web add github:EL4CTEO/roblox-devforum-mcp
+```
+
 Any other MCP client:
 
 ```json

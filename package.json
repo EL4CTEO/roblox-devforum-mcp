@@ -16,7 +16,11 @@
     "llm",
     "claude",
     "claude-code",
-    "game-development"
+    "game-development",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "author": "EL4CTEO",
@@ -35,9 +39,15 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "engines": {
     "node": ">=20"
   },
