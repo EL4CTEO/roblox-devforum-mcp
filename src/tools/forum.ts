@@ -4,14 +4,17 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   BUG_PARENT,
-  CATEGORIES,
+  DEFAULT_SLUGS,
   categoryName,
+  ensureCategories,
   getPostsByIds,
   getTopic,
   listCategories,
   listTags,
   listTopics,
+  resolveCategory,
   search,
+  suggestCategories,
   topicUrl,
   type CategorySlug,
   type SearchOptions,
@@ -22,8 +25,27 @@ import { decodeEntities, htmlToMarkdown, relativeDate, truncate } from "../forma
 import { bugStatus, likesOf, mergeResults, rank } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
-const CATEGORY_SLUGS = Object.keys(CATEGORIES) as Array<keyof typeof CATEGORIES>;
-const categoryEnum = z.enum(CATEGORY_SLUGS as [string, ...string[]]);
+/**
+ * A plain string, not an enum: the ids and the tree come from the forum at runtime, so a
+ * category Roblox adds has to be usable the day it appears rather than the next release.
+ * The slug is checked against the resolved tree instead, which gives a better error too.
+ */
+const categorySchema = z.string().min(2);
+const SLUG_LIST = DEFAULT_SLUGS.join(", ");
+
+/** Validate a caller-supplied slug against the live tree; returns the canonical slug. */
+async function resolveSlug(
+  slug: string | undefined,
+): Promise<{ slug?: string; error?: string }> {
+  if (!slug) return {};
+  await ensureCategories();
+  const found = resolveCategory(slug);
+  if (found) return { slug: found.slug };
+  const near = suggestCategories(slug);
+  return {
+    error: `Unknown category "${slug}".${near.length ? ` Did you mean ${near.join(", ")}?` : ""} Call list_categories for the current list.`,
+  };
+}
 
 const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
 
@@ -173,7 +195,7 @@ export function registerForumTools(server: McpServer): void {
         "Full-text search across the Roblox Developer Forum. Use this first when a Roblox bug, error message, or engine behaviour needs community context: paste the literal error string (e.g. \"502: API Services rejected request\") or a symptom description. Results are re-ranked to favour solved and recent threads. Follow up with get_thread on the topic_id you want to read.",
       inputSchema: {
         query: querySchema,
-        category: categoryEnum.optional().describe("Restrict to one category slug, e.g. scripting-support, engine-bugs, release-notes."),
+        category: categorySchema.optional().describe(`Restrict to one category slug, e.g. scripting-support, engine-bugs, release-notes. Known slugs: ${SLUG_LIST}. Any slug list_categories reports also works.`),
         tags: z.array(z.string()).max(5).optional().describe("Restrict to DevForum tags, e.g. [\"datastore\"]."),
         solved_only: z.boolean().default(false).describe("Only threads with an accepted answer."),
         min_likes: z.number().int().min(0).max(500).optional().describe("Minimum likes on a matching post."),
@@ -186,9 +208,11 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        const category = await resolveSlug(args.category);
+        if (category.error) return fail(category.error);
         const queries = asList(args.query);
         const { topics: found, posts, matchedBy } = await runQueries(queries, {
-          category: args.category,
+          category: category.slug,
           tags: args.tags,
           solvedOnly: args.solved_only,
           minLikes: args.min_likes,
@@ -223,7 +247,7 @@ export function registerForumTools(server: McpServer): void {
         "Search only the DevForum bug-report categories (engine, Studio, cloud services, mobile, website, Creator Hub, purchasing). Use this to answer \"is this a known Roblox bug or is it my code?\" — results carry the staff status tag (confirmed / fixed / cannot-reproduce) and last-activity date.",
       inputSchema: {
         query: querySchema,
-        area: categoryEnum.optional().describe("Narrow to a single bug category, e.g. engine-bugs or studio-bugs."),
+        area: categorySchema.optional().describe("Narrow to a single bug category slug, e.g. engine-bugs, studio-bugs, cloud-services-bugs, mobile-bugs, website-bugs, creator-hub-bugs, purchasing-bugs, documentation-issues. Defaults to every bug category."),
         after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Only reports active after this date (YYYY-MM-DD)."),
         limit: z.number().int().min(1).max(25).default(8),
         max_tokens: z.number().int().min(200).max(8000).default(2500),
@@ -232,8 +256,10 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        const area = await resolveSlug(args.area);
+        if (area.error) return fail(area.error);
         const queries = asList(args.query);
-        const base = { category: args.area ?? BUG_PARENT, after: args.after };
+        const base = { category: area.slug ?? BUG_PARENT, after: args.after };
         let { topics, posts, matchedBy } = await runQueries(queries, base);
         const label = queries.map((q) => `"${q}"`).join(" / ");
 
@@ -408,7 +434,7 @@ export function registerForumTools(server: McpServer): void {
       description:
         "Browse a category or tag without a search query. Use release-notes / announcements to check whether a recent Roblox update explains a regression, or scripting-support to see what is breaking for others right now.",
       inputSchema: {
-        category: categoryEnum.optional().describe("Category slug, e.g. release-notes, announcements, engine-bugs."),
+        category: categorySchema.optional().describe(`Category slug, e.g. release-notes, announcements, engine-bugs. Known slugs: ${SLUG_LIST}. Any slug list_categories reports also works.`),
         tag: z.string().optional().describe("Tag name instead of a category, e.g. datastore."),
         listing: z.enum(["latest", "top"]).default("latest"),
         period: z.enum(["daily", "weekly", "monthly", "quarterly", "yearly", "all"]).default("monthly").describe("Only used when listing is \"top\"."),
@@ -419,10 +445,12 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const topics = await listTopics(args.listing, args.category as CategorySlug | undefined, args.tag, args.period);
+        const category = await resolveSlug(args.category);
+        if (category.error) return fail(category.error);
+        const topics = await listTopics(args.listing, category.slug as CategorySlug | undefined, args.tag, args.period);
         if (topics.length === 0) return ok("No topics found for that category or tag.");
         const chosen = topics.slice(0, args.limit);
-        const scope = args.tag ? `tag:${args.tag}` : args.category ? `#${args.category}` : "the whole forum";
+        const scope = args.tag ? `tag:${args.tag}` : category.slug ? `#${category.slug}` : "the whole forum";
         const body = chosen.map((t, i) => topicLine(i + 1, t)).join("\n\n");
         return ok(truncate(`${args.listing} topics in ${scope}:\n\n${body}`, args.max_tokens, "lower limit"));
       } catch (err) {

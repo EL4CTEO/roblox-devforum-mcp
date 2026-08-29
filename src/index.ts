@@ -9,6 +9,7 @@ import { argv } from "node:process";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { warmCategories } from "./categories.js";
 import { registerForumTools } from "./tools/forum.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerUpdateTools } from "./tools/updates.js";
@@ -32,6 +33,9 @@ export function createServer(): McpServer {
   registerForumTools(server);
   registerDocsTools(server);
   registerUpdateTools(server);
+  // Pull the live category tree in the background, so the first result already names
+  // categories correctly. Startup never waits on it, and never fails if it fails.
+  warmCategories();
   return server;
 }
 

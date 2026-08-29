@@ -269,22 +269,47 @@ test("htmlToMarkdown pulls stranded heading and list markers back onto their tex
   assert.doesNotMatch(md, /^-\s*$/m, "no bare list marker on its own line");
 });
 
-// Live check: guards against list_categories advertising a slug the enum rejects, and warns
-// when Roblox adds a category. Skipped rather than failed when the forum is unreachable.
-test("every category the forum exposes is accepted as a filter slug", async (t) => {
-  const { listCategories, CATEGORIES, categoryPath } = await import("../dist/discourse.js");
+test("category slugs resolve to a canonical path, live or from the shipped fallback", async () => {
+  const { categoryPath, resolveCategory, suggestCategories } = await import("../dist/categories.js");
+
+  assert.equal(categoryPath("release-notes"), "updates/release-notes/62");
+  assert.equal(categoryPath("bug-reports"), "bug-reports/10");
+  assert.equal(categoryPath("Scripting-Support"), "help-and-feedback/scripting-support/55");
+  // An unknown slug still builds a path Discourse can redirect, rather than throwing.
+  assert.equal(categoryPath("brand-new-category"), "brand-new-category");
+  assert.equal(resolveCategory("nope"), undefined);
+
+  assert.deepEqual(suggestCategories("scripting"), ["scripting-support"]);
+  assert.ok(suggestCategories("engine-bug").includes("engine-bugs"));
+  assert.deepEqual(suggestCategories("!!!"), []);
+  // Only the best tier: "bugs" alone also matches xbox-bugs, but offering it alongside the
+  // exact answer makes the correction harder to read, not easier.
+  assert.deepEqual(suggestCategories("studio bugs"), ["studio-bugs"]);
+});
+
+// Live check: the ids the tools use must be the ids the forum publishes. Skipped rather
+// than failed when the forum is unreachable.
+test("the live site.json tree agrees with the shipped fallback", async (t) => {
+  const { CATEGORIES, ensureCategories, resolveCategory } = await import("../dist/categories.js");
+  const { listCategories } = await import("../dist/discourse.js");
+
+  await ensureCategories();
   let tree;
   try {
     tree = await listCategories();
   } catch {
     return t.skip("DevForum unreachable");
   }
+  if (tree.length === 0) return t.skip("DevForum unreachable");
+
   const advertised = tree.flatMap((c) => [c.slug, ...c.subcategories.map((s) => s.slug)]);
-  const missing = advertised.filter((slug) => !(slug in CATEGORIES));
-  assert.deepEqual(missing, [], "list_categories must not advertise slugs the enum rejects");
-  for (const slug of advertised) {
-    assert.match(categoryPath(slug), /^[a-z0-9/-]+\/\d+$/, `${slug} must build a canonical path`);
-  }
+  const unresolved = advertised.filter((slug) => !resolveCategory(slug));
+  assert.deepEqual(unresolved, [], "list_categories must not advertise slugs the filters reject");
+
+  const drifted = Object.entries(CATEGORIES)
+    .filter(([slug, id]) => resolveCategory(slug) && resolveCategory(slug).id !== id)
+    .map(([slug]) => slug);
+  assert.deepEqual(drifted, [], "shipped fallback ids no longer match the forum — refresh them");
 });
 
 test("splitApiEntry keeps the member when Luau writes it with a colon", async () => {

@@ -4,6 +4,9 @@ const UA =
   process.env.DEVFORUM_USER_AGENT ??
   "Mozilla/5.0 (compatible; roblox-devforum-mcp/1.0; +https://github.com/EL4CTEO/roblox-devforum-mcp)";
 
+/** Lives here rather than in discourse.ts so the category loader can use it without a cycle. */
+export const BASE_URL = (process.env.DEVFORUM_BASE_URL ?? "https://devforum.roblox.com").replace(/\/+$/, "");
+
 /**
  * Read a numeric setting, falling back when the value is not a usable number.
  *
