@@ -225,9 +225,26 @@ export function categoryPath(slug: string): string {
   return `${category.parent ? `${category.parent}/` : ""}${category.slug}/${category.id}`;
 }
 
+/** Words that end a whole family of slugs, mapped to the family root worth suggesting. */
+const FAMILY: Readonly<Record<string, string>> = {
+  bug: "bug-reports",
+  bugs: "bug-reports",
+  report: "bug-reports",
+  reports: "bug-reports",
+  feature: "feature-requests",
+  features: "feature-requests",
+  request: "feature-requests",
+  requests: "feature-requests",
+  support: "help-and-feedback",
+  help: "help-and-feedback",
+  feedback: "help-and-feedback",
+  resource: "resources",
+  resources: "resources",
+};
+
 /**
  * Slugs close enough to be what the caller meant. Discourse slugs are dash-joined words, so
- * a shared whole word ("scripting", "bugs") is the signal worth reporting back.
+ * a shared whole word ("scripting", "studio") is the signal worth reporting back.
  *
  * Only the best-scoring tier is returned: "studio bugs" matches studio-bugs on both words
  * and xbox-bugs on one, and offering the near-misses alongside the obvious answer only
@@ -237,18 +254,35 @@ export function suggestCategories(slug: string, limit = 3): string[] {
   const asked = slug.trim().toLowerCase();
   const words = asked.split(/[^a-z0-9]+/).filter(Boolean);
   if (words.length === 0) return [];
+
+  // Only a distinctive word counts. Half the tree ends in "bugs", so matching on that alone
+  // is noise: "physics-bugs" came back "did you mean xbox-bugs, other-bugs, forum-bugs?" —
+  // three wrong answers dressed up as a correction.
+  const distinctive = words.filter((w) => FAMILY[w] === undefined);
+  const generic = words.filter((w) => FAMILY[w] !== undefined);
   const scored = knownSlugs()
     .map((known) => {
       const parts = known.split("-");
-      let score = words.filter((w) => parts.includes(w)).length * 2;
+      const hits = distinctive.filter((w) => parts.includes(w)).length;
+      // A family word never qualifies a slug on its own, but it still breaks the tie
+      // between siblings: "studio bugs" must land on studio-bugs, not studio-features.
+      let score = hits > 0 ? hits * 4 + generic.filter((w) => parts.includes(w)).length : 0;
       if (score === 0 && (known.includes(asked) || asked.includes(known))) score = 1;
       return { known, score };
     })
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score || a.known.length - b.known.length);
-  const best = scored[0]?.score ?? 0;
-  return scored
-    .filter((s) => s.score === best)
-    .slice(0, limit)
-    .map((s) => s.known);
+
+  if (scored.length > 0) {
+    const best = scored[0]?.score ?? 0;
+    return scored
+      .filter((s) => s.score === best)
+      .slice(0, limit)
+      .map((s) => s.known);
+  }
+
+  // Nothing distinctive matched, so name the family the caller was plainly aiming at
+  // instead of siblings that merely end the same way.
+  const family = words.map((w) => FAMILY[w]).find((f): f is string => f !== undefined);
+  return family !== undefined && resolveCategory(family) ? [family] : [];
 }

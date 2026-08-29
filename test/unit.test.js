@@ -333,6 +333,12 @@ test("category slugs resolve to a canonical path, live or from the shipped fallb
   // Only the best tier: "bugs" alone also matches xbox-bugs, but offering it alongside the
   // exact answer makes the correction harder to read, not easier.
   assert.deepEqual(suggestCategories("studio bugs"), ["studio-bugs"]);
+
+  // A distinctive word matching nothing must not fall back on the shared suffix:
+  // "physics-bugs" answered "did you mean xbox-bugs, other-bugs, forum-bugs?" - all wrong.
+  assert.deepEqual(suggestCategories("physics-bugs"), ["bug-reports"]);
+  assert.deepEqual(suggestCategories("networking-features"), ["feature-requests"]);
+  assert.deepEqual(suggestCategories("lua-support"), ["help-and-feedback"]);
 });
 
 // Live check: the ids the tools use must be the ids the forum publishes. Skipped rather
