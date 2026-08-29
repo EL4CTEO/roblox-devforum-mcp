@@ -101,12 +101,21 @@ export function truncate(text: string, maxTokens: number, hint = ""): string {
   return `${kept.trimEnd()}\n\n…[truncated${hint ? `, ${hint}` : ""}]`;
 }
 
+/** Start of the UTC day holding `ms`. Forum timestamps are UTC, so the comparison is too. */
+function utcMidnight(ms: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
 /** ISO date -> "3 days ago" style, so the model can judge staleness cheaply. */
 export function relativeDate(iso: string | undefined): string {
   if (!iso) return "unknown";
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "unknown";
-  const days = Math.floor((Date.now() - then) / 86_400_000);
+  // Calendar days, not 24-hour blocks: a post from 20:00 yesterday read at 18:00 today is
+  // 22 hours old but is not "today", and get_weekly_recap printed the contradiction out
+  // loud as "published 2026-08-28 (today)".
+  const days = Math.round((utcMidnight(Date.now()) - utcMidnight(then)) / 86_400_000);
   if (days <= 0) return "today";
   if (days === 1) return "1 day ago";
   if (days < 30) return `${days} days ago`;

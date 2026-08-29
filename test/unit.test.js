@@ -48,6 +48,17 @@ test("relativeDate summarises age", () => {
   assert.match(relativeDate(days(90)), /mo ago/);
   assert.match(relativeDate(days(800)), /yr ago/);
   assert.equal(relativeDate(undefined), "unknown");
+
+  // Calendar days, not 24-hour blocks: get_weekly_recap printed "published 2026-08-28
+  // (today)" on the 29th because the post was 22 hours old.
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  yesterday.setUTCHours(23, 30, 0, 0);
+  assert.equal(relativeDate(yesterday.toISOString()), "1 day ago");
+
+  const earlierToday = new Date();
+  earlierToday.setUTCHours(0, 1, 0, 0);
+  assert.equal(relativeDate(earlierToday.toISOString()), "today");
 });
 
 test("buildSearchQuery emits Discourse advanced-search syntax", () => {
