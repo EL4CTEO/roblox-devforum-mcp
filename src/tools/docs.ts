@@ -47,6 +47,19 @@ export function splitApiEntry(entry: string): { raw: string; className: string; 
   return memberName === undefined ? { raw, className } : { raw, className, memberName };
 }
 
+/**
+ * Roblox publishes release notes on create.roblox.com but does not keep them in the
+ * open-source docs repo this tool indexes, so every spelling of the path 404s. DeepSeek spent
+ * eight calls — four searches and four paths — proving that to itself before giving up, so
+ * the dead end now names the tool that does have them.
+ */
+const RELEASE_NOTES_HINT =
+  "Release notes and the updates changelog are not in the creator-docs repo. Use get_whats_new for the latest releases and announcements, or get_thread on a \"Release Notes for NNN\" topic to read the discussion.";
+
+export function isReleaseNotesQuery(text: string): boolean {
+  return /release[\s-]?notes?|^\s*updates?\b|\/updates?\/|changelog/i.test(text);
+}
+
 export function registerDocsTools(server: McpServer): void {
   server.registerTool(
     "search_creator_docs",
@@ -68,12 +81,15 @@ export function registerDocsTools(server: McpServer): void {
         if (args.path) {
           // Resolve once, so the URL printed as the source is the page actually fetched.
           const resolved = resolveDocPath(args.path);
+          if (isReleaseNotesQuery(resolved)) return fail(`${resolved} is not in the docs repo. ${RELEASE_NOTES_HINT}`);
           const text = await fetchDoc(resolved);
           return ok(`${docUrl(resolved)}\n\n${truncate(text, args.max_tokens, "read the page online")}`);
         }
         const hits = await searchDocs(args.query as string, args.limit);
         if (hits.length === 0) {
-          return ok(`No documentation page matched "${args.query}". Try an exact class name (DataStoreService) or a shorter phrase.`);
+          return ok(
+            `No documentation page matched "${args.query}". ${isReleaseNotesQuery(args.query as string) ? RELEASE_NOTES_HINT : "Try an exact class name (DataStoreService) or a shorter phrase."}`,
+          );
         }
         const body = hits
           .map((h, i) => {

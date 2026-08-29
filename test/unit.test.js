@@ -81,6 +81,25 @@ test("parseTopicId reports a missing topic instead of throwing", () => {
   assert.equal(parseTopicId(undefined), undefined);
 });
 
+// Roblox keeps release notes off the docs repo, so every path spelling 404s. The dead end
+// has to name the tool that does have them, or a model just keeps guessing paths.
+test("release-notes queries are recognised so the dead end can redirect", async () => {
+  const { isReleaseNotesQuery } = await import("../dist/tools/docs.js");
+  for (const q of [
+    "release notes 736",
+    "release-notes-736",
+    "content/en-us/release-notes/release-notes-736.md",
+    "updates release notes",
+    "content/en-us/updates/736",
+    "changelog",
+  ]) {
+    assert.equal(isReleaseNotesQuery(q), true, `${q} must be recognised`);
+  }
+  for (const q of ["DataStoreService", "data store limits", "ProximityPrompt"]) {
+    assert.equal(isReleaseNotesQuery(q), false, `${q} must not be diverted`);
+  }
+});
+
 test("get_engine_api resolves a member path to its class", async () => {
   const { splitApiEntry } = await import("../dist/tools/docs.js");
   assert.deepEqual(splitApiEntry("Humanoid.LoadAnimation"), {
