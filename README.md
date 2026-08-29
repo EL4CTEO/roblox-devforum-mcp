@@ -19,7 +19,7 @@ claude mcp add roblox-devforum -- npx -y roblox-devforum-mcp
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 
 ```bash
-dsh plugin --profile web add github:EL4CTEO/roblox-devforum-mcp
+dsh plugin --profile web add roblox-devforum-mcp
 ```
 
 Any other MCP client:
