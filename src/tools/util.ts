@@ -30,7 +30,8 @@ export function toToolError(context: string, err: unknown): ToolResult {
 }
 
 /** Accept a raw topic id, a full DevForum URL, or a "slug/id" fragment. */
-export function parseTopicId(input: string | number): number | undefined {
+export function parseTopicId(input: string | number | undefined): number | undefined {
+  if (input === undefined) return undefined;
   if (typeof input === "number") return Number.isInteger(input) ? input : undefined;
   const trimmed = input.trim();
   if (/^\d+$/.test(trimmed)) return Number(trimmed);

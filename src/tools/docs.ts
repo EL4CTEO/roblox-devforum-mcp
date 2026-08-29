@@ -198,7 +198,12 @@ export function registerDocsTools(server: McpServer): void {
       description:
         "Authoritative signature lookup from the live Roblox API dump: a class's properties, methods, events and callbacks with parameter types, security level, deprecation and thread safety. Use this to confirm a method exists, check whether it is deprecated or server-only, or find the right member name before writing Luau.",
       inputSchema: {
-        name: z.string().min(2).describe("Class name (e.g. DataStoreService, Humanoid) or Enum name (e.g. RaycastFilterType)."),
+        name: z
+          .string()
+          .min(2)
+          .describe(
+            "Class name (e.g. DataStoreService, Humanoid), Enum name (e.g. RaycastFilterType), or a single member as \"Humanoid.LoadAnimation\" / \"Humanoid:LoadAnimation\", which narrows the lookup to that member.",
+          ),
         filter: z.string().optional().describe("Only members whose name contains this substring."),
         member_types: z
           .array(z.enum(["Property", "Function", "Event", "Callback"]))
@@ -211,7 +216,15 @@ export function registerDocsTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const cls = await findClass(args.name);
+        // A model that just read "DEPRECATED Humanoid.LoadAnimation" out of check_api_health
+        // asks this tool about "Humanoid.LoadAnimation" next. Rejecting the one spelling the
+        // neighbouring tool prints cost DeepSeek three retries before it guessed "Humanoid",
+        // so the member form resolves to its class and narrows to that member.
+        const entry = splitApiEntry(args.name);
+        const looked = (await findClass(args.name)) ? args.name : entry.className;
+        const memberFilter = looked === args.name ? undefined : entry.memberName;
+
+        const cls = await findClass(looked);
         if (!cls) {
           const enumType = await findEnum(args.name);
           if (enumType) {
@@ -226,7 +239,7 @@ export function registerDocsTools(server: McpServer): void {
 
         const chain = args.include_inherited ? await classChain(cls.Name) : [cls];
         const wanted = args.member_types ? new Set(args.member_types) : undefined;
-        const filter = args.filter?.toLowerCase();
+        const filter = (args.filter ?? memberFilter)?.toLowerCase();
 
         const sections: string[] = [];
         for (const entry of chain) {

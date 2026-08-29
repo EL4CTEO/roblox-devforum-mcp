@@ -74,6 +74,24 @@ test("topicUrl and categoryName map ids back to readable values", () => {
   assert.equal(categoryName(999999), "category-999999");
 });
 
+// DeepSeek called get_thread with {topicId} and get_engine_api with "Humanoid.LoadAnimation"
+// — the spellings our own output teaches — and got validation errors from the tools that
+// printed them. Both spellings resolve now.
+test("parseTopicId reports a missing topic instead of throwing", () => {
+  assert.equal(parseTopicId(undefined), undefined);
+});
+
+test("get_engine_api resolves a member path to its class", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+  assert.deepEqual(splitApiEntry("Humanoid.LoadAnimation"), {
+    raw: "Humanoid.LoadAnimation",
+    className: "Humanoid",
+    memberName: "LoadAnimation",
+  });
+  // A bare class name must still look up the class, not be read as a member.
+  assert.deepEqual(splitApiEntry("Humanoid"), { raw: "Humanoid", className: "Humanoid" });
+});
+
 test("parseTopicId accepts ids, urls and slugs", () => {
   assert.equal(parseTopicId(4756879), 4756879);
   assert.equal(parseTopicId(" 4756879 "), 4756879);
