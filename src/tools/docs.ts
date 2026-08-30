@@ -15,6 +15,7 @@ import {
   suggestClasses,
   suggestMembers,
   resolveMember,
+  cleanDocProse,
   resolveDocPath,
   deprecationNote,
   type ApiMember,
@@ -82,7 +83,7 @@ export function registerDocsTools(server: McpServer): void {
           // Resolve once, so the URL printed as the source is the page actually fetched.
           const resolved = resolveDocPath(args.path);
           if (isReleaseNotesQuery(resolved)) return fail(`${resolved} is not in the docs repo. ${RELEASE_NOTES_HINT}`);
-          const text = await fetchDoc(resolved);
+          const text = cleanDocProse(await fetchDoc(resolved), resolved);
           return ok(`${docUrl(resolved)}\n\n${truncate(text, args.max_tokens, "read the page online")}`);
         }
         const hits = await searchDocs(args.query as string, args.limit);

@@ -72,6 +72,44 @@ export function docUrl(path: string): string {
   return `https://create.roblox.com/docs/${rel}`;
 }
 
+/**
+ * Resolve a link written inside a docs page to its public URL. Repo-relative hrefs are
+ * resolved against the page they came from; "/cloud/..." against the docs root.
+ */
+function docLinkUrl(href: string, dir: string | undefined): string | undefined {
+  const [target, fragment] = href.split("#");
+  if (!target) return undefined;
+  const base = href.startsWith("/") ? DOCS_ROOT : dir === undefined ? undefined : `${dir}/`;
+  if (base === undefined) return undefined;
+  try {
+    return `${docUrl(resolveDocPath(base + target.replace(/^\//, "")))}${fragment ? `#${fragment}` : ""}`;
+  } catch {
+    return undefined; // a link out of the docs tree is not one to hand back
+  }
+}
+
+/**
+ * Docs prose is written for the create.roblox.com renderer, not for a reader: it carries
+ * `Class.X` cross-reference syntax and repo-relative links like
+ * "[notes](../../../physics/mover-constraints.md)". Left alone those reach the caller as
+ * dead paths — check_api_health printed one inside BodyVelocity's deprecation note.
+ */
+export function cleanDocProse(text: string, sourcePath?: string): string {
+  // Class./Datatype./Global./Library. are renderer syntax with no Luau meaning. Enum.X is
+  // left alone: it is valid Luau, so stripping the prefix would corrupt real code.
+  const s = text.replace(
+    /\b(?:Class|Datatype|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)/g,
+    "$1",
+  );
+  const cut = sourcePath?.lastIndexOf("/") ?? -1;
+  const dir = sourcePath !== undefined && cut > 0 ? sourcePath.slice(0, cut) : undefined;
+  return s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (whole, label: string, href: string) => {
+    if (/^(?:https?:|#|mailto:)/.test(href)) return whole;
+    const url = docLinkUrl(href, dir);
+    return url !== undefined ? `[${label}](${url})` : label;
+  });
+}
+
 /** Score a documentation path (stage one — cheap, no network). */
 export function scorePath(path: string, terms: string[], compactQuery: string): number {
   const lower = path.toLowerCase();
@@ -171,7 +209,7 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
         hit.score += 70;
         anchor = phraseAt;
       }
-      if (anchor >= 0) hit.snippet = snippetAround(source, anchor);
+      if (anchor >= 0) hit.snippet = cleanDocProse(snippetAround(source, anchor), hit.path);
       return hit;
     }),
   );
@@ -257,12 +295,30 @@ export async function findEnum(name: string) {
 }
 
 /** Class names that look like the query, used when the exact lookup misses. */
+/**
+ * Is `known` close enough to what was asked to be worth offering back? A bare substring test
+ * is worthless on short names: "SomeClassThatDoesNotExist" contains "Hat", and that is the
+ * class check_api_health used to name as the closest match.
+ */
+function closeEnough(target: string, known: string): boolean {
+  const [short, long] = target.length <= known.length ? [target, known] : [known, target];
+  if (short.length < 3 || !long.includes(short)) return false;
+  return short.length / long.length >= 0.4;
+}
+
+/** Closest first, so a suggestion list reads best-to-worst rather than in dump order. */
+function byCloseness(target: string) {
+  return (a: string, b: string): number =>
+    Math.abs(a.length - target.length) - Math.abs(b.length - target.length) || a.localeCompare(b);
+}
+
 export async function suggestClasses(name: string, limit = 8): Promise<string[]> {
   const dump = await apiDump();
   const target = name.toLowerCase();
   return (dump.Classes ?? [])
     .map((c) => c.Name)
-    .filter((n) => n.toLowerCase().includes(target) || target.includes(n.toLowerCase()))
+    .filter((n) => closeEnough(target, n.toLowerCase()))
+    .sort(byCloseness(target))
     .slice(0, limit);
 }
 
@@ -316,12 +372,10 @@ export async function suggestMembers(className: string, memberName: string, limi
   const names = new Set<string>();
   for (const owner of await classChain(className)) {
     for (const m of owner.Members ?? []) {
-      const lower = m.Name.toLowerCase();
-      if (lower.includes(target) || target.includes(lower)) names.add(m.Name);
-      if (names.size >= limit) return [...names];
+      if (closeEnough(target, m.Name.toLowerCase())) names.add(m.Name);
     }
   }
-  return [...names];
+  return [...names].sort(byCloseness(target)).slice(0, limit);
 }
 
 /**
@@ -364,8 +418,10 @@ export function parseDeprecationMessage(yaml: string, memberName?: string): stri
 /** Best-effort replacement guidance from the docs for a deprecated class or member. */
 export async function deprecationNote(className: string, memberName?: string): Promise<string | undefined> {
   try {
-    const yaml = await fetchDoc(`reference/engine/classes/${className}.yaml`);
-    return parseDeprecationMessage(yaml, memberName) ?? (memberName ? parseDeprecationMessage(yaml) : undefined);
+    const path = resolveDocPath(`reference/engine/classes/${className}.yaml`);
+    const yaml = await fetchDoc(path);
+    const raw = parseDeprecationMessage(yaml, memberName) ?? (memberName ? parseDeprecationMessage(yaml) : undefined);
+    return raw === undefined ? undefined : cleanDocProse(raw, path);
   } catch {
     return undefined; // docs are a bonus, never required
   }

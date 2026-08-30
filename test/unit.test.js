@@ -469,3 +469,65 @@ test("resolveDocPath keeps caller paths inside the docs tree", async () => {
   assert.throws(() => resolveDocPath(`${ROOT}../../README.md`), /outside the documentation tree/);
   assert.throws(() => resolveDocPath("../"), /outside the documentation tree/);
 });
+
+test("cleanDocProse turns renderer syntax into something a reader can follow", async () => {
+  const { cleanDocProse } = await import("../dist/docs.js");
+  const from = "content/en-us/reference/engine/classes/BodyVelocity.yaml";
+
+  // BodyVelocity's deprecation note reached check_api_health with the repo path intact,
+  // so the one useful thing in it — where to read about the replacement — was unusable.
+  const note = cleanDocProse(
+    "Use `Class.LinearVelocity`, see the [notes](../../../physics/mover-constraints.md#legacy).",
+    from,
+  );
+  assert.equal(
+    note,
+    "Use `LinearVelocity`, see the [notes](https://create.roblox.com/docs/physics/mover-constraints#legacy).",
+  );
+
+  // Root-relative links resolve without knowing the source page.
+  assert.match(cleanDocProse("[std](/cloud/reference/DataStoreEntry)"), /\(https:\/\/create\.roblox\.com\/docs\/cloud\/reference\/DataStoreEntry\)$/);
+
+  // Enum.X is valid Luau, so it survives; a link out of the docs tree drops to plain text.
+  assert.equal(cleanDocProse("Set `Enum.Material.Neon` on `Class.Part`."), "Set `Enum.Material.Neon` on `Part`.");
+  assert.equal(cleanDocProse("See [notes](../../../../elsewhere.md).", from), "See notes.");
+  assert.equal(cleanDocProse("See [notes](https://example.com)."), "See [notes](https://example.com).");
+});
+
+test("API suggestions stay off names that merely share a substring", async () => {
+  const { suggestClasses, suggestMembers } = await import("../dist/docs.js");
+
+  // "SomeClassThatDoesNotExist" contains "hat", and check_api_health used to answer
+  // "Closest: Hat." — a confident wrong answer is worse than no suggestion at all.
+  assert.deepEqual(await suggestClasses("SomeClassThatDoesNotExist"), []);
+  assert.deepEqual(await suggestMembers("Part", "Postion"), []);
+
+  // Real near-misses still come back, closest first.
+  assert.equal((await suggestClasses("Humanoid"))[0], "Humanoid");
+  assert.deepEqual(await suggestMembers("DataModel", "HttpGet"), ["HttpGetAsync"]);
+});
+
+test("rank keeps an on-topic thread above a better-looking off-topic one", () => {
+  const at = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+  // The shape that broke: "ProximityPrompt not triggering" put four solved, recent,
+  // well-liked threads about audio and DataStores above the ProximityPrompt thread
+  // Discourse itself ranked second, which then fell out of the results entirely.
+  const topics = [
+    { id: 1, title: "Roblox Audio API Mic System", bumped_at: at(23), posts_count: 3, reply_count: 2, like_count: 14, has_accepted_answer: true },
+    { id: 2, title: 'ProximityPrompt Only firing "TriggerEnded"', bumped_at: at(400), posts_count: 3, reply_count: 2, like_count: 0 },
+  ];
+  assert.equal(rank(topics, [], false, undefined, ["ProximityPrompt not triggering"])[0].topic.id, 2);
+
+  // Without a query the old behaviour stands: nothing says which thread is on topic.
+  assert.equal(rank(topics, [])[0].topic.id, 1);
+
+  // Separators in the title do not hide the match, and filler words never carry it.
+  const spaced = [{ id: 3, title: "Proximity Prompt broken", bumped_at: at(400), posts_count: 2 }];
+  assert.ok(rank(spaced, [], false, undefined, ["ProximityPrompt not triggering"])[0].score > 100);
+});
+
+test("distinctiveTerms drops the words that narrow nothing", async () => {
+  const { distinctiveTerms } = await import("../dist/rank.js");
+  assert.deepEqual(distinctiveTerms(["Why is my ProximityPrompt not triggering?"]), ["proximityprompt", "triggering"]);
+  assert.deepEqual(distinctiveTerms(["DataStore 502", "datastore timeout"]), ["datastore", "502", "timeout"]);
+});

@@ -22,7 +22,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { bugStatus, likesOf, mergeResults, rank } from "../rank.js";
+import { bugStatus, FILLER, likesOf, mergeResults, rank } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 /**
@@ -161,14 +161,6 @@ async function runQueries(
 
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
 
-/** Words that carry no weight in a Discourse index but still narrow an AND-ed query. */
-const FILLER = new Set([
-  "a", "an", "the", "is", "are", "was", "were", "be", "been", "not", "no", "on", "in", "at", "to",
-  "of", "for", "and", "or", "but", "my", "me", "i", "it", "its", "this", "that", "when", "why",
-  "how", "does", "doesnt", "dont", "cant", "with", "without", "after", "before", "from", "any",
-  "some", "get", "getting", "still", "keep", "keeps", "randomly", "sometimes", "issue", "problem",
-]);
-
 /**
  * Discourse ANDs every term, so a natural symptom sentence can match nothing at all while
  * its two distinctive words find the report you wanted: "ProximityPrompt not triggering on
@@ -243,7 +235,7 @@ export function registerForumTools(server: McpServer): void {
             : " Try fewer words, the raw error text, or drop the filters.";
           return ok(`No DevForum threads matched ${label}.${floor}`);
         }
-        const ranked = rank(topics, posts, args.order !== "relevance", matchedBy).slice(0, args.limit);
+        const ranked = rank(topics, posts, args.order !== "relevance", matchedBy, queries).slice(0, args.limit);
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
@@ -306,7 +298,7 @@ export function registerForumTools(server: McpServer): void {
             `No bug reports matched ${label}${tried}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
-        const ranked = rank(topics, posts, false, matchedBy).slice(0, args.limit);
+        const ranked = rank(topics, posts, false, matchedBy, [...queries, ...(broadened ?? [])]).slice(0, args.limit);
         const phrasings = broadened ? queries.length + broadened.length : queries.length;
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, phrasings > 1 ? matchedBy.get(r.topic.id) : undefined))

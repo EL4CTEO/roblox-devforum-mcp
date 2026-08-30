@@ -31,6 +31,39 @@ export function bugStatus(topic: RawTopic): string | undefined {
   return tagStatus(topic) ?? (topic.has_accepted_answer ? "solved" : undefined);
 }
 
+/** Words that carry no weight in a Discourse index but still narrow an AND-ed query. */
+export const FILLER = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "not", "no", "on", "in", "at", "to",
+  "of", "for", "and", "or", "but", "my", "me", "i", "it", "its", "this", "that", "when", "why",
+  "how", "does", "doesnt", "dont", "cant", "with", "without", "after", "before", "from", "any",
+  "some", "get", "getting", "still", "keep", "keeps", "randomly", "sometimes", "issue", "problem",
+]);
+
+/** The words in a query that actually say what it is about. */
+export function distinctiveTerms(queries: string[]): string[] {
+  const terms = new Set<string>();
+  for (const query of queries) {
+    for (const word of query.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (word.length >= 3 && !FILLER.has(word)) terms.add(word);
+    }
+  }
+  return [...terms];
+}
+
+/**
+ * How much of the query the title itself carries. Titles are compared with the separators
+ * removed, so "ProximityPrompt" matches a title written "proximity prompt" either way.
+ */
+function titleMatch(title: string | undefined, terms: string[]): number {
+  if (!title || terms.length === 0) return 0;
+  const compact = title.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Weighted by length: "tweenservice" says what a thread is about, "server" barely narrows
+  // anything, and counting them equally lets a title carrying only the vague word score half.
+  const total = terms.reduce((sum, t) => sum + t.length, 0);
+  const hit = terms.filter((t) => compact.includes(t)).reduce((sum, t) => sum + t.length, 0);
+  return hit / total;
+}
+
 function ageYears(iso: string | undefined): number {
   if (!iso) return 5;
   const t = Date.parse(iso);
@@ -86,7 +119,9 @@ export function rank(
   posts: RawPost[],
   originalOrder = false,
   matchedBy?: Map<number, string[]>,
+  queries: string[] = [],
 ): Ranked[] {
+  const terms = distinctiveTerms(queries);
   const byTopic = new Map<number, RawPost>();
   for (const post of posts) {
     const key = post.topic_id;
@@ -99,27 +134,40 @@ export function rank(
     const post = byTopic.get(topic.id);
     if (originalOrder) return { topic, post, score: -index };
 
-    let score = 100 - index * 3; // Discourse relevance stays the backbone
-    if (topic.has_accepted_answer) score += 45;
+    // Discourse relevance and the staleness of the thread are the frame; everything else
+    // is thread quality, which only earns its weight once the thread looks on topic.
+    let score = 100 - index * 3;
 
-    // Independent phrasings agreeing on a thread is strong evidence it is on-topic, and the
-    // result line advertises the count, so it has to actually move the ranking.
+    // Whether the title is about the thing asked about used to be missing entirely, and a
+    // search for "ProximityPrompt not triggering" answered with four solved, recent,
+    // well-liked threads about audio, dialogue and DataStores — while the ProximityPrompt
+    // thread Discourse ranked second lost to them on age and likes and never appeared.
+    const onTopic = titleMatch(topic.title, terms);
+    score += onTopic * 70;
+
+    const bumpedAge = ageYears(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at);
+    // Roblox changes fast, so age is weighted hard: a 3-year-old thread loses more than an
+    // accepted answer is worth, and past ~6 years nothing outranks a current thread.
+    score -= Math.min(bumpedAge * 15, 85);
+
+    // Independent phrasings agreeing on a thread is itself evidence it is on topic, and the
+    // result line advertises the count, so it moves the ranking at full weight.
     const agreement = matchedBy?.get(topic.id)?.length ?? 1;
     score += (agreement - 1) * 22;
 
+    // A well-run thread about something else is still about something else: quality counts
+    // in full only for a thread the query actually points at, and a third otherwise.
+    let quality = 0;
+    if (topic.has_accepted_answer) quality += 45;
     // Read tags directly: bugStatus() infers "solved" from has_accepted_answer, so scoring
     // off it would count the same signal twice.
     const status = tagStatus(topic);
-    if (status && SOLVED_TAGS.has(status)) score += 25;
-    if (status && DEAD_TAGS.has(status)) score -= 20;
-
-    // Roblox changes fast, so age is weighted hard: a 3-year-old thread loses more than an
-    // accepted answer is worth (+45), and past ~6 years nothing outranks a current thread.
-    const bumpedAge = ageYears(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at);
-    score -= Math.min(bumpedAge * 15, 85);
-    score += Math.min(likesOf(topic, post) * 1.5, 25);
-    score += Math.min((topic.reply_count ?? 0) * 0.8, 15);
-    if ((topic.posts_count ?? 0) <= 1) score -= 8; // nobody ever replied
+    if (status && SOLVED_TAGS.has(status)) quality += 25;
+    if (status && DEAD_TAGS.has(status)) quality -= 20;
+    quality += Math.min(likesOf(topic, post) * 1.5, 25);
+    quality += Math.min((topic.reply_count ?? 0) * 0.8, 15);
+    if ((topic.posts_count ?? 0) <= 1) quality -= 8; // nobody ever replied
+    score += quality * (terms.length === 0 ? 1 : 0.3 + 0.7 * onTopic);
 
     return { topic, post, score };
   });
