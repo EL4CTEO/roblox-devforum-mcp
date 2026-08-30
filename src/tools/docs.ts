@@ -26,6 +26,25 @@ import { ok, fail, toToolError } from "./util.js";
 const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
 
 /**
+ * Narrow a datatype reference page to one member, the way the class path narrows to one
+ * member. Reference YAML lists them as "  - name: Vector3.Magnitude", so the blocks split on
+ * that; anything above the first is the datatype's own summary and is always kept.
+ */
+function filterDatatypeMembers(page: string, memberName: string): string {
+  const blocks = page.split(/\n(?=\s*-\s+name:\s)/);
+  const header = blocks[0] ?? "";
+  const wanted = blocks
+    .slice(1)
+    .filter((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*\\b${memberName}\\s*$`, "im").test(b));
+  // No block matched: the member may be written differently on this page, and half a page is
+  // a worse answer than the whole one.
+  if (wanted.length === 0) return page;
+  // The member leads. Vector3's own summary runs to 1.4 KB, so putting it first pushed the
+  // member the caller asked about past the end of a normal token budget.
+  return [...wanted, "# --- the whole datatype ---", header].join("\n");
+}
+
+/**
  * Split a check_api_health entry into the class and member it asks about.
  *
  * Luau writes method calls with a colon — "Humanoid:LoadAnimation", "game:GetService(...)" —
@@ -248,9 +267,22 @@ export function registerDocsTools(server: McpServer): void {
             const items = (enumType.Items ?? []).map((i) => `${i.Name} = ${i.Value}`).join(", ");
             return ok(`Enum.${enumType.Name}\n${items || "(no items)"}`);
           }
+          // Vector3, CFrame and UDim2 are datatypes, not classes, so the dump has no entry
+          // and this answered "no engine class named Vector3. Did you mean Vector3Curve,
+          // Vector3Value?" — two real classes, neither of them what was asked about. Their
+          // signatures live in the docs, and check_api_health already knew to look there.
+          const datatype = await findDatatype(entry.className);
+          if (datatype) {
+            const path = resolveDocPath(`reference/engine/datatypes/${datatype}.yaml`);
+            const page = cleanDocProse(await fetchDoc(path), path);
+            const body = memberFilter === undefined ? page : filterDatatypeMembers(page, memberFilter);
+            return ok(
+              `${datatype} is a datatype, not a class — from the documentation, not the API dump.\n${docUrl(path)}\n\n${truncate(body, args.max_tokens, "read the page online")}`,
+            );
+          }
           const suggestions = await suggestClasses(args.name);
           return fail(
-            `No engine class or enum named "${args.name}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
+            `No engine class, enum or datatype named "${args.name}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
           );
         }
 

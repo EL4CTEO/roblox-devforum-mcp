@@ -73,6 +73,21 @@ export function docUrl(path: string): string {
 }
 
 /**
+ * Guide pages are MDX: the prose is wrapped in React components and preceded by their
+ * imports. A 500-token read of physics/mover-constraints came back roughly four fifths
+ * <Grid>, <Card> and <CardMedia>, so the budget bought almost no documentation. The tags go
+ * and their text stays — an <Alert> body is real content, its angle brackets are not.
+ */
+function stripMdx(text: string): string {
+  return text
+    .replace(/^import\s+\w+\s+from\s+['"][^'"]+['"];?\s*$/gm, "")
+    .replace(/<\/?[A-Z]\w*(?:\s[^<>]*?)?\/?>/g, "")
+    // The handful of raw HTML tags the guides use are layout too; their text is the content.
+    .replace(/<\/?(?:figure|figcaption|div|span|center|br|p)(?:\s[^<>]*?)?\/?>/gi, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
  * Resolve a link written inside a docs page to its public URL. Repo-relative hrefs are
  * resolved against the page they came from; "/cloud/..." against the docs root.
  */
@@ -95,11 +110,13 @@ function docLinkUrl(href: string, dir: string | undefined): string | undefined {
  * dead paths — check_api_health printed one inside BodyVelocity's deprecation note.
  */
 export function cleanDocProse(text: string, sourcePath?: string): string {
-  // Class./Datatype./Global./Library. are renderer syntax with no Luau meaning. Enum.X is
-  // left alone: it is valid Luau, so stripping the prefix would corrupt real code.
-  const s = text.replace(
-    /\b(?:Class|Datatype|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)/g,
-    "$1",
+  // Class./Datatype./Global./Library. are renderer syntax with no Luau meaning; the
+  // "Class.Constraint|Constraints" form carries the words to show after the pipe. Enum.X
+  // without a pipe is left alone: it is valid Luau, so stripping it would corrupt real code.
+  const s = stripMdx(text).replace(
+    /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(?:\|([^`\n]*)(?=`))?/g,
+    (whole, kind: string, name: string, display?: string) =>
+      display !== undefined ? display : kind === "Enum" ? whole : name,
   );
   const cut = sourcePath?.lastIndexOf("/") ?? -1;
   const dir = sourcePath !== undefined && cut > 0 ? sourcePath.slice(0, cut) : undefined;

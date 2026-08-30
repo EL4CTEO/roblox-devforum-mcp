@@ -531,3 +531,29 @@ test("distinctiveTerms drops the words that narrow nothing", async () => {
   assert.deepEqual(distinctiveTerms(["Why is my ProximityPrompt not triggering?"]), ["proximityprompt", "triggering"]);
   assert.deepEqual(distinctiveTerms(["DataStore 502", "datastore timeout"]), ["datastore", "502", "timeout"]);
 });
+
+test("cleanDocProse unwraps the MDX the guides are written in", async () => {
+  const { cleanDocProse } = await import("../dist/docs.js");
+
+  // A 500-token read of physics/mover-constraints was roughly four fifths <Grid>, <Card>
+  // and <CardMedia>, so the token budget bought almost no documentation.
+  const page = [
+    "import Foo from '../includes/studio/x.md'",
+    "<Grid container spacing={4}>",
+    '<Button href="../physics/constraints/linear-velocity.md">Linear Velocity</Button>',
+    "<p></p>",
+    '<CardMedia component="video" src="../a.mp4" />',
+    "<figcaption>`Class.LinearVelocity` applies force</figcaption>",
+    "</Grid>",
+  ].join("\n");
+  assert.equal(
+    cleanDocProse(page, "content/en-us/physics/mover-constraints.md").trim(),
+    "Linear Velocity\n\n`LinearVelocity` applies force",
+  );
+
+  // "Class.X|words to show" is a link with display text, not a name.
+  assert.equal(cleanDocProse("includes `Class.Constraint|Constraints` that"), "includes `Constraints` that");
+  assert.equal(cleanDocProse("see `Enum.KeyCode|key codes`"), "see `key codes`");
+  // Enum.X on its own is real Luau and survives.
+  assert.equal(cleanDocProse("set `Enum.Material.Neon`"), "set `Enum.Material.Neon`");
+});
