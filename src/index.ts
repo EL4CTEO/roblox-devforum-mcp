@@ -14,7 +14,7 @@ import { registerForumTools } from "./tools/forum.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerUpdateTools } from "./tools/updates.js";
 
-const VERSION = "1.1.5";
+const VERSION = "1.2.0";
 
 export function createServer(): McpServer {
   const server = new McpServer(
