@@ -11,6 +11,7 @@ import { BASE_URL, getJson, TTL } from "./http.js";
 
 export { BASE_URL } from "./http.js";
 export {
+  bugAreas,
   CATEGORIES,
   categoryTree,
   DEFAULT_SLUGS,
@@ -145,12 +146,15 @@ export async function listTopics(
   page = 0,
 ): Promise<RawTopic[]> {
   let path: string;
-  if (tag) path = `/tag/${encodeURIComponent(tag)}/l/${listing}.json`;
-  else if (category) {
-    // The id in the path has to be the live one, or Discourse serves a different category.
-    await ensureCategories();
-    path = `/c/${categoryPath(category)}/l/${listing}.json`;
-  } else path = `/${listing}.json`;
+  // The id in a category path has to be the live one, or Discourse serves another category.
+  if (category) await ensureCategories();
+  if (tag && category) {
+    // Both used to mean "tag wins": asking for release-notes tagged datastore silently
+    // dropped the category and answered with community-resources threads.
+    path = `/tags/c/${categoryPath(category)}/${encodeURIComponent(tag)}/l/${listing}.json`;
+  } else if (tag) path = `/tag/${encodeURIComponent(tag)}/l/${listing}.json`;
+  else if (category) path = `/c/${categoryPath(category)}/l/${listing}.json`;
+  else path = `/${listing}.json`;
   const url = new URL(`${BASE_URL}${path}`);
   if (listing === "top" && period) url.searchParams.set("period", period);
   if (page > 0) url.searchParams.set("page", String(page));

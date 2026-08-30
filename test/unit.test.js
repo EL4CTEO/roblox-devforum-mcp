@@ -557,3 +557,15 @@ test("cleanDocProse unwraps the MDX the guides are written in", async () => {
   // Enum.X on its own is real Luau and survives.
   assert.equal(cleanDocProse("set `Enum.Material.Neon`"), "set `Enum.Material.Neon`");
 });
+
+test("bugAreas covers bug-reports and only its children", async () => {
+  const { bugAreas } = await import("../dist/categories.js");
+  const areas = bugAreas();
+  // search_bugs accepted area:"scripting-support" and returned community Q&A under a header
+  // promising Roblox's triage status, with [solved] beside each answered thread.
+  assert.ok(areas.includes("bug-reports"));
+  assert.ok(areas.includes("engine-bugs"));
+  assert.ok(areas.includes("studio-bugs"));
+  assert.ok(!areas.includes("scripting-support"));
+  assert.ok(!areas.includes("engine-features"));
+});

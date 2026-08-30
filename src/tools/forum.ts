@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   BUG_PARENT,
+  bugAreas,
   DEFAULT_SLUGS,
   categoryName,
   ensureCategories,
@@ -266,6 +267,15 @@ export function registerForumTools(server: McpServer): void {
       try {
         const area = await resolveSlug(args.area);
         if (area.error) return fail(area.error);
+        // area:"scripting-support" was accepted and searched, and the results came back under
+        // a header promising staff triage with [solved] beside each one — but in a support
+        // category that tag only means somebody replied. Presenting community Q&A as
+        // confirmed Roblox bugs is the one answer this tool must never give.
+        if (area.slug !== undefined && !bugAreas().includes(area.slug)) {
+          return fail(
+            `"${area.slug}" is not a bug category, and only bug categories carry Roblox's triage status. Use one of: ${bugAreas().join(", ")}. For "${area.slug}" use search_devforum with category "${area.slug}".`,
+          );
+        }
         const queries = asList(args.query);
         const base = { category: area.slug ?? BUG_PARENT, after: args.after };
         let { topics, posts, matchedBy } = await runQueries(queries, base);
@@ -474,7 +484,9 @@ export function registerForumTools(server: McpServer): void {
         const topics = await listTopics(args.listing, category.slug as CategorySlug | undefined, args.tag, args.period);
         if (topics.length === 0) return ok("No topics found for that category or tag.");
         const chosen = topics.slice(0, args.limit);
-        const scope = args.tag ? `tag:${args.tag}` : category.slug ? `#${category.slug}` : "the whole forum";
+        const scope =
+          [category.slug ? `#${category.slug}` : "", args.tag ? `tag:${args.tag}` : ""].filter(Boolean).join(" ") ||
+          "the whole forum";
         const body = chosen.map((t, i) => topicLine(i + 1, t)).join("\n\n");
         return ok(truncate(`${args.listing} topics in ${scope}:\n\n${body}`, args.max_tokens, "lower limit"));
       } catch (err) {

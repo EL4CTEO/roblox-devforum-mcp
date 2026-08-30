@@ -225,6 +225,18 @@ export function categoryPath(slug: string): string {
   return `${category.parent ? `${category.parent}/` : ""}${category.slug}/${category.id}`;
 }
 
+/**
+ * The categories where Roblox triages bugs: bug-reports and whatever sits under it, live
+ * tree included, so a bug category Roblox adds is covered without a release.
+ */
+export function bugAreas(): string[] {
+  const areas = ["bug-reports"];
+  for (const category of current.bySlug.values()) {
+    if (category.parent === "bug-reports") areas.push(category.slug);
+  }
+  return areas;
+}
+
 /** Words that end a whole family of slugs, mapped to the family root worth suggesting. */
 const FAMILY: Readonly<Record<string, string>> = {
   bug: "bug-reports",
