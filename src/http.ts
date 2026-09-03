@@ -38,6 +38,25 @@ export const TTL = {
   static: 86_400_000,
 } as const;
 
+/**
+ * The upstream did not answer in time.
+ *
+ * Worth its own type because a timeout is the one failure a caller can do something about.
+ * A search for `status:solved` alongside a tag filter takes the DevForum's index over thirty
+ * seconds; with three retries stacked on a 12-second timeout the tool sat for 51 seconds and
+ * then returned "This operation was aborted", which names neither the cause nor a way out.
+ */
+export class TimeoutError extends Error {
+  constructor(readonly url: string, readonly elapsedMs: number) {
+    super(`the request timed out after ${Math.round(elapsedMs / 1000)}s: ${url}`);
+    this.name = "TimeoutError";
+  }
+}
+
+export function isTimeout(err: unknown): boolean {
+  return err instanceof TimeoutError;
+}
+
 export class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -143,9 +162,13 @@ function retryable(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-async function fetchOnce(url: string, headers: Record<string, string>): Promise<Response> {
+async function fetchOnce(
+  url: string,
+  headers: Record<string, string>,
+  budgetMs = TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), Math.min(TIMEOUT_MS, budgetMs));
   try {
     return await fetch(url, {
       headers: { "user-agent": UA, accept: "application/json, text/plain, */*", ...headers },
@@ -157,14 +180,24 @@ async function fetchOnce(url: string, headers: Record<string, string>): Promise<
   }
 }
 
+/**
+ * Retries are for a service that is briefly unwell, not one that is simply slow. A query the
+ * index cannot answer inside the timeout will not answer inside the next three either, so a
+ * whole call gets one overall deadline rather than MAX_RETRIES × TIMEOUT_MS of patience.
+ */
+const DEADLINE_MS = envInt("DEVFORUM_DEADLINE_MS", TIMEOUT_MS * 2, 100);
+
 async function request(url: string, headers: Record<string, string>): Promise<Response> {
   const host = safeHost(url);
+  const started = Date.now();
   await acquire(host);
   try {
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+      const elapsed = Date.now() - started;
+      if (attempt > 0 && elapsed >= DEADLINE_MS) break;
       try {
-        const res = await fetchOnce(url, headers);
+        const res = await fetchOnce(url, headers, Math.max(DEADLINE_MS - elapsed, 500));
         if (res.ok) return res;
         if (!retryable(res.status) || attempt === MAX_RETRIES) {
           throw new HttpError(res.status, url);
@@ -178,14 +211,25 @@ async function request(url: string, headers: Record<string, string>): Promise<Re
       } catch (err) {
         if (err instanceof HttpError) throw err;
         lastError = err;
+        // An abort is our own timer firing, not a transient network fault: the query was
+        // too expensive for the index, and asking again changes nothing but the wait.
+        if (isAbort(err)) {
+          lastError = new TimeoutError(url, Date.now() - started);
+          break;
+        }
         if (attempt === MAX_RETRIES) break;
         await sleep(400 * 2 ** attempt + Math.random() * 250);
       }
     }
-    throw lastError instanceof Error ? lastError : new Error(`Request failed: ${url}`);
+    if (lastError instanceof Error) throw lastError;
+    throw new TimeoutError(url, Date.now() - started);
   } finally {
     release(host);
   }
+}
+
+function isAbort(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
 /** Cached JSON GET. */
@@ -209,18 +253,21 @@ export async function getText(url: string, ttl: number = TTL.static): Promise<st
   return text;
 }
 
-/** Cached JSON GET against the GitHub API (token optional, raises rate limit). */
+/**
+ * Cached JSON GET against the GitHub API.
+ *
+ * Deliberately unauthenticated. The only call that lands here is the creator-docs file tree,
+ * fetched once and then kept on disk for a day, so it never approaches the anonymous rate
+ * limit — and a server that reads public forums has no business asking anyone for a token.
+ */
 export async function getGithubJson<T>(url: string, ttl: number = TTL.static): Promise<T> {
   const key = `gh:${url}`;
   const cached = cacheGet<T>(key);
   if (cached !== undefined) return cached;
-  const headers: Record<string, string> = {
+  const res = await request(url, {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
-  };
-  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-  if (token) headers.authorization = `Bearer ${token}`;
-  const res = await request(url, headers);
+  });
   const data = (await res.json()) as T;
   cacheSet(key, data, ttl);
   return data;

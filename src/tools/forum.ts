@@ -22,8 +22,8 @@ import {
   type RawPost,
   type RawTopic,
 } from "../discourse.js";
-import { decodeEntities, htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { bugStatus, FILLER, likesOf, mergeResults, rank } from "../rank.js";
+import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
+import { bugStatus, FILLER, likesOf, mergeResults, rank, replyCount } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 /**
@@ -68,18 +68,18 @@ function topicArg(args: { topic?: number | string; topic_id?: number | string })
 
 function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: string[]): string {
   const status = bugStatus(topic);
-  const badge = status ? `[${status}] ` : "";
+  const badge = status ? `[${status.label}] ` : "";
   // Search payloads carry no topic like_count, so the number is the matched post's and
   // changes with whichever post matched. Say which it is rather than letting the same
-  // thread report "1 likes" in one search and "0 likes" in the next.
+  // thread report "1 like" in one search and "0 likes" in the next.
   const likes =
     topic.like_count === undefined && post
-      ? `${likesOf(topic, post)} likes on the matched post`
-      : `${likesOf(topic, post)} likes`;
+      ? `${plural(likesOf(topic, post), "like")} on the matched post`
+      : plural(likesOf(topic, post), "like");
   const meta = [
     `#${categoryName(topic.category_id)}`,
     likes,
-    `${topic.reply_count ?? Math.max((topic.posts_count ?? 1) - 1, 0)} replies`,
+    plural(replyCount(topic), "reply", "replies"),
     relativeDate(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at),
   ];
   if (topic.tags?.length) meta.push(topic.tags.slice(0, 4).join(", "));
@@ -161,7 +161,7 @@ function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   const role = badge ? ` (${badge})` : "";
   const accepted = post.accepted_answer ? " ✅ ACCEPTED ANSWER" : "";
   const likes = post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
-  const header = `--- #${post.post_number} by ${author}${role}${accepted} · ${relativeDate(post.created_at)}${likes ? ` · ${likes} likes` : ""}`;
+  const header = `--- #${post.post_number} by ${author}${role}${accepted} · ${relativeDate(post.created_at)}${likes ? ` · ${plural(likes, "like")}` : ""}`;
   const body = htmlToMarkdown(post.cooked ?? "", { keepQuotes: post.post_number === 1 });
   const url = topicUrl(topic.id, topic.slug, post.post_number);
   return `${header}\n${truncate(body, budget, `open ${url}`)}`;
@@ -300,7 +300,7 @@ export function registerForumTools(server: McpServer): void {
     {
       title: "Search Roblox bug reports",
       description:
-        "Search only the DevForum bug-report categories (engine, Studio, cloud services, mobile, website, Creator Hub, purchasing). Use this to answer \"is this a known Roblox bug or is it my code?\" — results carry the staff status tag (confirmed / fixed / cannot-reproduce) and last-activity date.",
+        "Search only the DevForum bug-report categories (engine, Studio, cloud services, mobile, website, Creator Hub, purchasing). Use this to answer \"is this a known Roblox bug or is it my code?\" — a hit means somebody reported the same symptom, with its category, last-activity date and whether a reply was marked as the solution. Roblox does not tag reports with a public triage state, so read the thread with get_thread to see whether staff actually answered.",
       inputSchema: {
         query: querySchema,
         area: categorySchema.optional().describe("Narrow to a single bug category slug, e.g. engine-bugs, studio-bugs, cloud-services-bugs, mobile-bugs, website-bugs, creator-hub-bugs, purchasing-bugs, documentation-issues. Defaults to every bug category."),
@@ -376,7 +376,14 @@ export function registerForumTools(server: McpServer): void {
         const widened = broadened
           ? ` ${pairs.map(([asked, trimmed]) => `"${asked}" matched nothing as written, so "${trimmed}" was searched too`).join("; ")}.`
           : "";
-        const header = `${ranked.length} bug reports for ${label} (status tag shown in brackets when Roblox staff triaged it).${widened}`;
+        // Say exactly what a badge means. Roblox retired the triage tags this header used to
+        // promise, so [answered] — the reporter marking a Solution — is almost always what a
+        // bracket holds, and reading it as "Roblox confirmed this" is the wrong conclusion.
+        const anyTag = ranked.some((r) => bugStatus(r.topic)?.fromTag);
+        const legend = anyTag
+          ? "Brackets hold the topic's own status tag, or [answered] where a reply was marked as the solution."
+          : "[answered] means a reply was marked as the solution — by whoever opened the thread, not by Roblox. Read the thread for a staff response before treating a report as confirmed.";
+        const header = `${ranked.length} bug reports for ${label}. ${legend}${widened}`;
         return ok(truncate(`${header}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_bugs failed", err);
@@ -425,15 +432,22 @@ export function registerForumTools(server: McpServer): void {
 
         const chosen = [first, accepted, ...rest].filter((p): p is RawPost => Boolean(p)).slice(0, args.max_posts);
 
-        const status = bugStatus(topic);
+        // The topic endpoint omits has_accepted_answer even where search reports it, so a
+        // thread search had just badged [answered] opened with no mention of one. The posts
+        // it returns carry the flag themselves.
+        const status = bugStatus({ ...topic, has_accepted_answer: topic.has_accepted_answer ?? all.some((p) => p.accepted_answer) });
         const head = [
           `# ${topic.title}`,
           [
             `#${categoryName(topic.category_id)}`,
-            status ? `status: ${status}` : undefined,
-            `${topic.like_count ?? 0} likes`, // the topic endpoint does return like_count
-            `${topic.posts_count ?? all.length} posts`,
-            `${topic.views ?? 0} views`,
+            status
+              ? status.fromTag
+                ? `status tag: ${status.label}`
+                : "answered (a reply the asker marked as the solution)"
+              : undefined,
+            plural(topic.like_count ?? 0, "like"), // the topic endpoint does return like_count
+            plural(topic.posts_count ?? all.length, "post"),
+            plural(topic.views ?? 0, "view"),
             `created ${relativeDate(topic.created_at)}`,
             `last reply ${relativeDate(topic.last_posted_at ?? topic.bumped_at)}`,
           ]

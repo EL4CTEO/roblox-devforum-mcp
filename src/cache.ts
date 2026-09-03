@@ -13,16 +13,29 @@ const DIR = process.env.DEVFORUM_CACHE_DIR ?? join(tmpdir(), "roblox-devforum-mc
  */
 export async function cachedJson<T>(name: string, maxAgeMs: number, load: () => Promise<T>): Promise<T> {
   const file = join(DIR, `${name}.json`);
+  let stale: T | undefined;
   try {
     const info = await stat(file);
-    if (Date.now() - info.mtimeMs < maxAgeMs) {
-      return JSON.parse(await readFile(file, "utf8")) as T;
-    }
+    const cached = JSON.parse(await readFile(file, "utf8")) as T;
+    if (Date.now() - info.mtimeMs < maxAgeMs) return cached;
+    stale = cached;
   } catch {
-    /* missing, stale or unreadable — fall through to the loader */
+    /* missing or unreadable — fall through to the loader */
   }
 
-  const value = await load();
+  let value: T;
+  try {
+    value = await load();
+  } catch (err) {
+    // Yesterday's copy of the docs file tree or the API dump answers almost every question
+    // today's would. Failing the whole tool because GitHub rate-limited one refresh trades a
+    // slightly stale answer for no answer at all.
+    if (stale !== undefined) {
+      process.stderr.write(`[roblox-devforum-mcp] ${name} refresh failed, using the cached copy\n`);
+      return stale;
+    }
+    throw err;
+  }
   try {
     await mkdir(DIR, { recursive: true });
     await writeFile(file, JSON.stringify(value), "utf8");

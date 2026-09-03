@@ -40,7 +40,7 @@ Any other MCP client:
 | Tool | What it does |
 | --- | --- |
 | `search_devforum` | Search the forum. Filters for category, tag, solved-only, likes and date. Pass several phrasings to run them at once. |
-| `search_bugs` | Search only the bug reports and show Roblox's status tag: confirmed, fixed, cannot-reproduce. |
+| `search_bugs` | Search only the bug-report categories, so a hit means somebody reported the same symptom. |
 | `get_thread` | Read a topic as Markdown, accepted answer first, code blocks intact. |
 | `get_replies` | Page through a long thread. |
 | `list_recent` | Latest or top topics in a category or tag. |
@@ -52,6 +52,10 @@ Any other MCP client:
 | `get_weekly_recap` | Any Roblox Weekly Recap, current or historical. |
 
 Every tool is read-only, returns Markdown with source URLs, and stays inside a token budget.
+
+`[answered]` beside a result means a reply was marked as the solution — by whoever opened the
+thread, not by Roblox. Roblox does not publish a triage state, so read the thread to see
+whether staff replied.
 
 ## Example
 
@@ -69,13 +73,13 @@ All optional.
 | --- | --- | --- |
 | `DEVFORUM_CACHE_TTL` | `300` | Search cache lifetime, in seconds. |
 | `DEVFORUM_TIMEOUT_MS` | `12000` | Per-request timeout. |
+| `DEVFORUM_DEADLINE_MS` | `24000` | Total time one request may spend, retries included. |
 | `DEVFORUM_MAX_RETRIES` | `3` | Retries on 429 and 5xx. |
 | `DEVFORUM_CONCURRENCY` | `4` | Simultaneous requests to the DevForum. |
 | `DEVFORUM_CDN_CONCURRENCY` | `8` | Simultaneous requests to GitHub-hosted docs. |
 | `DEVFORUM_DOCS_SCAN` | `14` | Doc pages scored per search. |
 | `DEVFORUM_CACHE_DIR` | OS temp dir | Where the API dump and docs index are cached. |
 | `DEVFORUM_BASE_URL` | `https://devforum.roblox.com` | Point at another Discourse instance. |
-| `GITHUB_TOKEN` | — | Raises the GitHub rate limit for the docs file listing. |
 
 A bad value is ignored, with a note on stderr, and the default is used.
 

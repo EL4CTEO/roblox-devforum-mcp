@@ -19,16 +19,43 @@ export function likesOf(topic: RawTopic, post?: RawPost): number {
   return topic.like_count ?? post?.like_count ?? post?.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
 }
 
+/**
+ * Replies a reader would actually find under the opening post.
+ *
+ * Discourse's `reply_count` counts only posts that reply *directly* to post #1, so a thread
+ * whose answers hang off each other under-reports badly: topic 583926 has 11 posts and
+ * reports `reply_count: 6`, and 4052968 has one reply and reports zero. Thread length minus
+ * the opening post is what "N replies" means to whoever reads the line.
+ */
+export function replyCount(topic: RawTopic): number {
+  if (topic.posts_count !== undefined) return Math.max(topic.posts_count - 1, 0);
+  return topic.reply_count ?? 0;
+}
+
 /** Triage status taken only from the topic's own tags — no inference. */
-function tagStatus(topic: RawTopic): string | undefined {
+export function tagStatus(topic: RawTopic): string | undefined {
   return (topic.tags ?? [])
     .map((t) => t.toLowerCase())
     .find((t) => SOLVED_TAGS.has(t) || DEAD_TAGS.has(t));
 }
 
-/** Status tags Roblox staff apply to bug reports, surfaced verbatim to the model. */
-export function bugStatus(topic: RawTopic): string | undefined {
-  return tagStatus(topic) ?? (topic.has_accepted_answer ? "solved" : undefined);
+/**
+ * The badge shown beside a result, and where it came from.
+ *
+ * These are two different claims and used to be flattened into one word. Roblox's triage
+ * tags are staff saying "we reproduced this"; `has_accepted_answer` is whoever opened the
+ * thread clicking Solution, which anyone can do. Printing the second as "[solved]" under a
+ * header promising staff triage told the caller Roblox had confirmed a report nobody at
+ * Roblox had touched.
+ *
+ * It also matters because the triage tags are gone: `confirmed`, `cannot-reproduce`,
+ * `not-a-bug`, `by-design` and `invalid` no longer exist as DevForum tags at all, so in
+ * practice every badge search_bugs prints is the accepted-answer one.
+ */
+export function bugStatus(topic: RawTopic): { label: string; fromTag: boolean } | undefined {
+  const tag = tagStatus(topic);
+  if (tag) return { label: tag, fromTag: true };
+  return topic.has_accepted_answer ? { label: "answered", fromTag: false } : undefined;
 }
 
 /** Words that carry no weight in a Discourse index but still narrow an AND-ed query. */
@@ -159,13 +186,13 @@ export function rank(
     // in full only for a thread the query actually points at, and a third otherwise.
     let quality = 0;
     if (topic.has_accepted_answer) quality += 45;
-    // Read tags directly: bugStatus() infers "solved" from has_accepted_answer, so scoring
-    // off it would count the same signal twice.
+    // Read tags directly: bugStatus() falls back to has_accepted_answer, so scoring off it
+    // would count the same signal twice.
     const status = tagStatus(topic);
     if (status && SOLVED_TAGS.has(status)) quality += 25;
     if (status && DEAD_TAGS.has(status)) quality -= 20;
     quality += Math.min(likesOf(topic, post) * 1.5, 25);
-    quality += Math.min((topic.reply_count ?? 0) * 0.8, 15);
+    quality += Math.min(replyCount(topic) * 0.8, 15);
     if ((topic.posts_count ?? 0) <= 1) quality -= 8; // nobody ever replied
     score += quality * (terms.length === 0 ? 1 : 0.3 + 0.7 * onTopic);
 

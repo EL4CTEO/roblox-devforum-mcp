@@ -166,6 +166,67 @@ function stripPreamble(text: string): string {
   return out.trimStart();
 }
 
+/**
+ * Guide front matter is repo bookkeeping, not documentation. Reading
+ * cloud-services/data-stores handed the caller `comments: The Creator Hub links to some of
+ * the anchors on this page, so if you move any of the headers…` — a note to Roblox's docs
+ * team, spending the caller's budget. The title and description are worth keeping; the rest
+ * is not.
+ */
+export function renderGuide(text: string): string {
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  if (!match?.[1]) return text.trimStart();
+  const field = (name: string): string | undefined =>
+    new RegExp(`^${name}:\\s*(.+)$`, "m").exec(match[1] as string)?.[1]?.trim().replace(/^['"]|['"]$/g, "");
+  const head = [field("title") ? `# ${field("title")}` : "", field("description") ?? ""].filter(Boolean).join("\n\n");
+  const body = text.slice(match[0].length).trimStart();
+  return head ? `${head}\n\n${body}` : body;
+}
+
+/**
+ * Reference pages are machine-generated YAML, and handing it over raw spends a third of the
+ * budget on scaffolding: a 700-token read of Vector3 was the "this file is automatically
+ * generated" banner plus `code_samples: []`, `tags: []` and `deprecation_message: ''`
+ * repeated once per member. Empty fields say nothing that their absence does not.
+ */
+export function cleanReferenceYaml(text: string): string {
+  return text
+    .replace(/^(?:#[^\n]*\n)+/, "")
+    .split("\n")
+    .filter((line) => !/^\s*[a-z_]+:\s*(\[\]|\{\}|''|""|null)\s*$/.test(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimStart();
+}
+
+/** The `summary:` block at the top of a reference page — what the class or datatype is for. */
+export function referenceSummary(yaml: string): string | undefined {
+  const at = yaml.search(/^summary:\s*\|?\s*$/m);
+  if (at < 0) return undefined;
+  const lines = yaml.slice(at).split("\n").slice(1);
+  const body: string[] = [];
+  for (const line of lines) {
+    if (line.trim() === "") break;
+    if (!/^\s+\S/.test(line)) break;
+    body.push(line.trim());
+  }
+  const text = body.join(" ").trim();
+  return text || undefined;
+}
+
+/**
+ * Members a datatype reference page lists, by bare name ("Magnitude", "new", "Cross").
+ * Operator sections are written "- name: Vector3 * Vector3" and are skipped by the pattern.
+ */
+export async function datatypeMembers(name: string): Promise<Set<string>> {
+  const yaml = await fetchDoc(resolveDocPath(`reference/engine/datatypes/${name}.yaml`));
+  const names = new Set<string>();
+  for (const m of yaml.matchAll(/^\s*-\s+name:\s+[A-Za-z0-9_]+\.([A-Za-z0-9_]+)\s*$/gm)) {
+    if (m[1]) names.add(m[1]);
+  }
+  return names;
+}
+
 function snippetAround(text: string, index: number): string {
   const start = Math.max(0, index - 90);
   const raw = text.slice(start, start + 260).replace(/\s+/g, " ").trim();
@@ -226,7 +287,11 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
         hit.score += 70;
         anchor = phraseAt;
       }
-      if (anchor >= 0) hit.snippet = cleanDocProse(snippetAround(source, anchor), hit.path);
+      // A reference page is YAML, so the text around the match is "name: DataStoreRequestType
+      // type: enum summary: |" — the file's shape, not an answer. Its own summary is.
+      const raw = hit.kind === "guide" ? undefined : referenceSummary(source);
+      if (raw) hit.snippet = cleanDocProse(raw, hit.path);
+      else if (anchor >= 0) hit.snippet = cleanDocProse(snippetAround(source, anchor), hit.path);
       return hit;
     }),
   );
@@ -327,6 +392,15 @@ function closeEnough(target: string, known: string): boolean {
 function byCloseness(target: string) {
   return (a: string, b: string): number =>
     Math.abs(a.length - target.length) - Math.abs(b.length - target.length) || a.localeCompare(b);
+}
+
+/** Names close enough to `target` to be worth offering back, closest first. */
+export function nearestNames(target: string, known: Iterable<string>, limit = 6): string[] {
+  const lower = target.toLowerCase();
+  return [...known]
+    .filter((n) => closeEnough(lower, n.toLowerCase()))
+    .sort(byCloseness(lower))
+    .slice(0, limit);
 }
 
 export async function suggestClasses(name: string, limit = 8): Promise<string[]> {

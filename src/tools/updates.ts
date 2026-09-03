@@ -22,7 +22,22 @@ function withinDays(topic: RawTopic, days: number): boolean {
 }
 
 function line(topic: RawTopic): string {
-  return `- ${topic.title}\n  ${relativeDate(topic.created_at ?? topic.bumped_at)} · ${topicUrl(topic.id, topic.slug)}  (topic_id: ${topic.id})`;
+  // "published", explicitly: every other tool dates a topic by its last activity, so the
+  // same Release Notes thread reads "2 days ago" in list_recent and "7 days ago" here.
+  return `- ${topic.title}\n  published ${relativeDate(topic.created_at ?? topic.bumped_at)} · ${topicUrl(topic.id, topic.slug)}  (topic_id: ${topic.id})`;
+}
+
+/**
+ * Newest first by publication date.
+ *
+ * Discourse's "latest" is bump order, and a recap collects replies for weeks, so the raw
+ * listing put the 17-21 August recap ahead of the 24-28 August one — get_whats_new called a
+ * fortnight-old digest "the latest Weekly Recap" and filed the current one under "earlier".
+ */
+function newestFirst(topics: RawTopic[]): RawTopic[] {
+  return [...topics].sort(
+    (a, b) => Date.parse(b.created_at ?? b.bumped_at ?? "") - Date.parse(a.created_at ?? a.bumped_at ?? ""),
+  );
 }
 
 /** The recap archive, newest first, paged until `needed` are collected or the tag runs out. */
@@ -33,7 +48,7 @@ async function recapArchive(needed: number): Promise<RawTopic[]> {
     if (batch.length === 0) break;
     all.push(...batch);
   }
-  return all.sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
+  return newestFirst(all);
 }
 
 export function registerUpdateTools(server: McpServer): void {
@@ -127,17 +142,22 @@ export function registerUpdateTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const [recaps, notes, announcements] = await Promise.all([
+        const [rawRecaps, rawNotes, rawAnnouncements] = await Promise.all([
           listTopics("latest", undefined, WEEKLY_RECAP_TAG),
           listTopics("latest", "release-notes"),
           listTopics("latest", "announcements"),
         ]);
+        // Every section here answers "what shipped recently", so all three are ordered by
+        // publication rather than by the replies a months-old thread is still collecting.
+        const recaps = newestFirst(rawRecaps);
+        const notes = newestFirst(rawNotes);
+        const announcements = newestFirst(rawAnnouncements);
 
         const sections: string[] = [];
 
         const latestRecap = recaps[0];
         if (latestRecap) {
-          let block = `## Weekly Recap\n${latestRecap.title}\n${relativeDate(latestRecap.created_at)} · ${topicUrl(latestRecap.id, latestRecap.slug)}`;
+          let block = `## Weekly Recap\n${latestRecap.title}\npublished ${relativeDate(latestRecap.created_at)} · ${topicUrl(latestRecap.id, latestRecap.slug)}`;
           if (args.include_recap_body) {
             const topic = await getTopic(latestRecap.id);
             const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "", { keepQuotes: true });

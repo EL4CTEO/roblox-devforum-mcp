@@ -7,7 +7,7 @@ import {
   type Category,
   type CategorySlug,
 } from "./categories.js";
-import { BASE_URL, getJson, TTL } from "./http.js";
+import { BASE_URL, getJson, isTimeout, TTL } from "./http.js";
 
 export { BASE_URL } from "./http.js";
 export {
@@ -119,12 +119,34 @@ export function buildSearchQuery(opts: SearchOptions): string {
   return parts.filter(Boolean).join(" ");
 }
 
-export async function search(opts: SearchOptions): Promise<{ topics: RawTopic[]; posts: RawPost[] }> {
+async function runSearch(opts: SearchOptions): Promise<{ topics: RawTopic[]; posts: RawPost[] }> {
   const url = new URL(`${BASE_URL}/search.json`);
   url.searchParams.set("q", buildSearchQuery(opts));
   if (opts.page && opts.page > 1) url.searchParams.set("page", String(opts.page));
   const data = await getJson<SearchResponse>(url.toString(), TTL.search);
   return { topics: data.topics ?? [], posts: data.posts ?? [] };
+}
+
+/**
+ * Run a search, and never let `status:solved` be the reason a call returns nothing.
+ *
+ * It is the one operator the DevForum's index cannot answer reliably: "tween not playing
+ * tags:scripting status:solved" and "datastore #scripting-support status:solved" both run
+ * past thirty seconds, while every one of those terms on its own answers in about one. The
+ * search payload already carries `has_accepted_answer`, so when the server cannot do the
+ * filtering in time it is done here — a slightly shallower solved-only page beats a tool
+ * call that spends the caller's time and then fails.
+ */
+export async function search(opts: SearchOptions): Promise<{ topics: RawTopic[]; posts: RawPost[] }> {
+  try {
+    return await runSearch(opts);
+  } catch (err) {
+    if (!opts.solvedOnly || !isTimeout(err)) throw err;
+    const { topics, posts } = await runSearch({ ...opts, solvedOnly: false });
+    const solved = topics.filter((t) => t.has_accepted_answer);
+    const kept = new Set(solved.map((t) => t.id));
+    return { topics: solved, posts: posts.filter((p) => p.topic_id === undefined || kept.has(p.topic_id)) };
+  }
 }
 
 export async function getTopic(topicId: number): Promise<TopicResponse> {

@@ -1,6 +1,6 @@
 /** Small helpers shared by the tool implementations. */
 
-import { HttpError } from "../http.js";
+import { HttpError, TimeoutError } from "../http.js";
 
 export interface ToolResult {
   [key: string]: unknown;
@@ -18,6 +18,14 @@ export function fail(message: string): ToolResult {
 
 /** Turn any thrown value into a readable, non-fatal tool error. */
 export function toToolError(context: string, err: unknown): ToolResult {
+  // A timeout is the one failure the caller can act on, and the DevForum's search index is
+  // where it happens: some filter combinations run past thirty seconds while each term on
+  // its own answers in about one. Say which lever to pull instead of naming an abort.
+  if (err instanceof TimeoutError) {
+    return fail(
+      `${context}: ${err.message}. The DevForum's search index is slow for some filter combinations — retry with fewer words, or drop one filter (tags, category, solved_only).`,
+    );
+  }
   if (err instanceof HttpError) {
     if (err.status === 404) return fail(`${context}: not found (404). Check the id or path.`);
     if (err.status === 403 || err.status === 429) {

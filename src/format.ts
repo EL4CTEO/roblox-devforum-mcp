@@ -86,6 +86,11 @@ function stripTags(input: string): string {
   return input.replace(/<[^>]+>/g, "");
 }
 
+/** "1 reply" / "2 replies" — a result line that says "1 replies" reads as a rendering bug. */
+export function plural(count: number, word: string, plural = `${word}s`): string {
+  return `${count} ${count === 1 ? word : plural}`;
+}
+
 /** Roughly 4 characters per token — good enough for output budgeting. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);

@@ -4,11 +4,15 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   classChain,
+  cleanReferenceYaml,
+  datatypeMembers,
   docUrl,
   fetchDoc,
   findClass,
   findEnum,
   findDatatype,
+  nearestNames,
+  renderGuide,
   searchDocs,
   securityOf,
   signature,
@@ -102,7 +106,9 @@ export function registerDocsTools(server: McpServer): void {
           // Resolve once, so the URL printed as the source is the page actually fetched.
           const resolved = resolveDocPath(args.path);
           if (isReleaseNotesQuery(resolved)) return fail(`${resolved} is not in the docs repo. ${RELEASE_NOTES_HINT}`);
-          const text = cleanDocProse(await fetchDoc(resolved), resolved);
+          const source = await fetchDoc(resolved);
+          const shaped = resolved.endsWith(".yaml") ? cleanReferenceYaml(source) : renderGuide(source);
+          const text = cleanDocProse(shaped, resolved);
           return ok(`${docUrl(resolved)}\n\n${truncate(text, args.max_tokens, "read the page online")}`);
         }
         const hits = await searchDocs(args.query as string, args.limit);
@@ -165,7 +171,17 @@ export function registerDocsTools(server: McpServer): void {
               // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
               const datatype = await findDatatype(className);
               if (datatype) {
-                return `OK        ${entry} — ${datatype} is a datatype; see https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
+                const url = `https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
+                // The member used to be thrown away here, so "Vector3.TotallyFakeMember" was
+                // answered "OK — Vector3 is a datatype" and counted under "all APIs are
+                // current and usable". The point of this tool is catching exactly that.
+                if (!memberName) return `OK        ${entry} — ${datatype} is a datatype; see ${url}`;
+                const members = await datatypeMembers(datatype);
+                if (members.has(memberName)) {
+                  return `OK        ${entry} — ${datatype}.${memberName} exists (datatype, documented at ${url})`;
+                }
+                const near = nearestNames(memberName, members);
+                return `NOT FOUND ${entry} — the ${datatype} datatype has no "${memberName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` See ${url}`}`;
               }
               const near = await suggestClasses(className);
               return `NOT FOUND ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
@@ -274,7 +290,7 @@ export function registerDocsTools(server: McpServer): void {
           const datatype = await findDatatype(entry.className);
           if (datatype) {
             const path = resolveDocPath(`reference/engine/datatypes/${datatype}.yaml`);
-            const page = cleanDocProse(await fetchDoc(path), path);
+            const page = cleanDocProse(cleanReferenceYaml(await fetchDoc(path)), path);
             const body = memberFilter === undefined ? page : filterDatatypeMembers(page, memberFilter);
             return ok(
               `${datatype} is a datatype, not a class — from the documentation, not the API dump.\n${docUrl(path)}\n\n${truncate(body, args.max_tokens, "read the page online")}`,
@@ -308,7 +324,8 @@ export function registerDocsTools(server: McpServer): void {
 
           const lines: string[] = [];
           for (const [type, list] of [...grouped].sort()) {
-            lines.push(`${type}s:`);
+            // The dump's MemberType is "Property", and appending an "s" printed "Propertys:".
+            lines.push(`${type === "Property" ? "Properties" : `${type}s`}:`);
             for (const m of list.sort((a, b) => a.Name.localeCompare(b.Name))) {
               const notes: string[] = [];
               const security = securityOf(m);
