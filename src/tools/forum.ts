@@ -168,6 +168,26 @@ const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new S
  * mobile" returned zero bug reports, "ProximityPrompt mobile" returned the staff-answered
  * OnePerButton one. Used only after a search comes back empty.
  */
+/**
+ * The filters a call actually set, named. An empty result has to say which filter to loosen:
+ * "drop the filters" leaves the caller guessing which of four it was.
+ */
+export function activeFilters(args: {
+  category?: string;
+  tags?: string[];
+  solved_only?: boolean;
+  after?: string;
+  area?: string;
+}): string[] {
+  return [
+    args.category === undefined ? "" : `category ${args.category}`,
+    args.area === undefined ? "" : `in ${args.area}`,
+    args.tags?.length ? `tags ${args.tags.join(",")}` : "",
+    args.solved_only === true ? "solved_only" : "",
+    args.after === undefined ? "" : `active after ${args.after}`,
+  ].filter(Boolean);
+}
+
 export function broaden(query: string): string | undefined {
   const words = query
     .split(/\s+/)
@@ -231,9 +251,12 @@ export function registerForumTools(server: McpServer): void {
         const topics = applyMinLikes(found, posts, args.min_likes);
         const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
+          const active = activeFilters(args);
           const floor = args.min_likes
             ? ` ${found.length > 0 ? `${found.length} threads matched the text but none reached` : "Nothing reached"} ${args.min_likes}+ likes — lower min_likes.`
-            : " Try fewer words, the raw error text, or drop the filters.";
+            : active.length > 0
+              ? ` Active filters: ${active.join(", ")} — try dropping one, or use the raw error text.`
+              : " Try fewer words or the raw error text.";
           return ok(`No DevForum threads matched ${label}.${floor}`);
         }
         const ranked = rank(topics, posts, args.order !== "relevance", matchedBy, queries).slice(0, args.limit);
@@ -304,6 +327,19 @@ export function registerForumTools(server: McpServer): void {
 
         if (topics.length === 0) {
           const tried = alts.length > 0 ? ", with or without its less distinctive words" : "";
+          // "Not a known engine bug" is the strongest claim this tool makes, and a filter
+          // that excluded everything must never be reported as one: after:2030-01-01
+          // answered exactly that for "datastore", which has hundreds of reports. Say what
+          // the filter cost before saying Roblox has nothing.
+          const filters = activeFilters({ after: args.after, area: area.slug });
+          if (filters.length > 0) {
+            const wider = await runQueries(queries, { category: BUG_PARENT });
+            if (wider.topics.length > 0) {
+              return ok(
+                `No bug reports matched ${label} ${filters.join(" and ")} — but ${wider.topics.length} matched without that filter, so this is the filter and not the absence of a report. Widen or drop it.`,
+              );
+            }
+          }
           return ok(
             `No bug reports matched ${label}${tried}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );

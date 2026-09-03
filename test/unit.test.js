@@ -569,3 +569,24 @@ test("bugAreas covers bug-reports and only its children", async () => {
   assert.ok(!areas.includes("scripting-support"));
   assert.ok(!areas.includes("engine-features"));
 });
+
+test("an empty result names the filter that emptied it", async () => {
+  const { activeFilters } = await import("../dist/tools/forum.js");
+
+  // search_bugs answered after:2030-01-01 with "that often means it is not a known engine
+  // bug" for "datastore", which has hundreds of reports. The filter, not the forum.
+  assert.deepEqual(activeFilters({ after: "2030-01-01" }), ["active after 2030-01-01"]);
+  assert.deepEqual(activeFilters({ area: "education-bugs" }), ["in education-bugs"]);
+  assert.deepEqual(activeFilters({ category: "engine-bugs", after: "2030-01-01" }), [
+    "category engine-bugs",
+    "active after 2030-01-01",
+  ]);
+  assert.deepEqual(activeFilters({ tags: ["datastore", "saving"], solved_only: true }), [
+    "tags datastore,saving",
+    "solved_only",
+  ]);
+
+  // No filters set means nothing to blame, and solved_only:false is not a filter.
+  assert.deepEqual(activeFilters({}), []);
+  assert.deepEqual(activeFilters({ solved_only: false, tags: [] }), []);
+});
