@@ -453,10 +453,13 @@ export function registerForumTools(server: McpServer): void {
           Math.max(args.max_tokens - 60, PER_POST_FLOOR),
           `use get_replies with topic_id ${topicId}`,
         );
+        // Count what a reader would actually be given: the bot notices this tool already
+        // drops are not replies, and promising one that turns out to be "topic automatically
+        // opened" sends the caller to fetch nothing.
+        const bots = all.filter((p) => isAutomated(p)).length;
+        const left = stream.length - shown - bots;
         const footer =
-          stream.length > shown
-            ? `\n\n(${stream.length - shown} more replies — use get_replies with topic_id ${topicId}.)`
-            : "";
+          left > 0 ? `\n\n(${left} more replies — use get_replies with topic_id ${topicId}.)` : "";
         return ok(`${head}\n\n${body}${footer}`);
       } catch (err) {
         return toToolError(`get_thread(${topicId}) failed`, err);
@@ -494,17 +497,29 @@ export function registerForumTools(server: McpServer): void {
         const stream = topic.post_stream?.stream ?? [];
         if (stream.length === 0) return fail(`Topic ${topicId} exposes no post stream.`);
 
+        // Post #1 is the topic, not a reply, and get_thread has already shown it in full —
+        // paging it again spent most of page 1 on text the caller just read. Discourse
+        // returns the stream in post order, so the first id is always the opening post.
+        const replies = stream.slice(1);
         const start = (args.page - 1) * args.limit;
-        const ids = stream.slice(start, start + args.limit);
+        const ids = replies.slice(start, start + args.limit);
         if (ids.length === 0) {
-          return ok(`Page ${args.page} is past the end of topic ${topicId} (${stream.length} posts total).`);
+          return ok(`Page ${args.page} is past the end of topic ${topicId} (${replies.length} replies).`);
         }
 
         const cached = topic.post_stream?.posts ?? [];
         const missing = ids.filter((id) => !cached.some((p) => p.id === id));
         const fetched = missing.length ? await getPostsByIds(topicId, missing) : [];
         const byId = new Map([...cached, ...fetched].map((p) => [p.id, p]));
-        const posts = ids.map((id) => byId.get(id)).filter((p): p is RawPost => Boolean(p));
+        // get_thread drops Discourse's bot notices; this tool did not, so "system — This
+        // topic was automatically opened after 10 minutes" was served as a reply.
+        const posts = ids
+          .map((id) => byId.get(id))
+          .filter((p): p is RawPost => p !== undefined)
+          .filter((p) => !isAutomated(p));
+        if (posts.length === 0) {
+          return ok(`Page ${args.page} of topic ${topicId} holds only automated notices — try the next page.`);
+        }
 
         const { body, shown } = renderWithin(
           posts,
@@ -512,7 +527,7 @@ export function registerForumTools(server: McpServer): void {
           Math.max(args.max_tokens - 30, PER_POST_FLOOR),
           "raise max_tokens or lower limit",
         );
-        const total = Math.ceil(stream.length / args.limit);
+        const total = Math.max(Math.ceil(replies.length / args.limit), 1);
         const short = shown < posts.length ? ` — ${shown} of ${posts.length} posts, raise max_tokens for the rest` : "";
         return ok(`${topic.title} — replies page ${args.page}/${total}${short}\n\n${body}`);
       } catch (err) {
