@@ -76,6 +76,10 @@ export interface RawPost {
   admin?: boolean;
   moderator?: boolean;
   user_title?: string | null;
+  /** Discourse's earned standing, 0 (new) to 4 (leader). Absent on some payloads. */
+  trust_level?: number;
+  /** The group badge Discourse shows beside a name, e.g. "Programmers", "Roblox_Staff". */
+  flair_name?: string | null;
   actions_summary?: Array<{ id: number; count?: number }>;
 }
 

@@ -35,32 +35,47 @@ timestamps) and `users[]` comes back empty, so decorating eight search hits woul
 extra topic fetches on the tool's hottest path. Not worth it: search finds the thread,
 credibility matters when reading it.
 
-**Rule — show a badge only when it carries information.** Most DevForum accounts are TL1;
-printing that on every post is noise.
+**Rule — show a badge only when it carries information.**
 
 | Condition | Shown |
 | --- | --- |
+| `username` is `system` | nothing — Discourse's own bot |
 | `staff`, `admin` or `moderator` | `(Roblox staff)` |
-| `trust_level` 4 | `(TL4 leader)` |
-| `trust_level` 3 | `(TL3 regular)` |
-| `flair_name`, non-staff | `(Programmers)` |
+| `flair_name` | `(Programmers)` |
 | otherwise | nothing |
 
-Flair and trust combine: `(Programmers · TL3 regular)`.
+### Trust level was designed in, then removed
+
+The first draft badged `trust_level` 3 and 4 as earned standing. Checking it against live
+threads killed it: **Roblox does not use Discourse's promotion ladder.** loleris — author of
+ProfileService, 1567 likes on the post, the most-used data module on the platform — is
+**TL1**, identical to an account opened yesterday. So is every other community author
+sampled. The only accounts above TL1 are staff and the `system` bot.
+
+A trust badge would therefore repeat the staff flag where it fires and say nothing anywhere
+else, while implying the absence of a badge means an inexperienced author. Dropped.
+
+### The bot was being introduced as Roblox staff
+
+Discourse sets `staff: true` on its own `system` account, so post #2 of the Weekly Recap
+thread rendered as `system (Roblox staff)` above "This topic was automatically opened after
+10 minutes" — a bot notice presented as an employee's reply. Two causes, both fixed:
+`authorBadge` never badges `system`, and `isAutomated` only matched "automatically closed"
+and "automatically deleted", so "opened" slipped through.
 
 ## Result
 
 ```
---- #1 by frecklesnspectacles (Roblox staff) · 6 days ago · 42 likes
---- #4 by loleris (Programmers · TL3 regular) · 2 yr ago · 65 likes
---- #7 by SomeNewAccount · 3 days ago
+--- #1 by frecklesnspectacles (Roblox staff) · 6 days ago · 22 likes
+--- #4 by ParadoxSoftwork (Programmers) · 6 days ago · 10 likes
+--- #3 by Bestspyboy · 6 days ago · 4 likes
 ```
 
 ## Components
 
 - `authorBadge(post): string` in `src/tools/forum.ts` — pure, unit-testable, no network.
 - `renderPost` calls it in place of the existing inline staff check.
-- Four fields added to the `RawPost` interface in `src/discourse.ts`, all optional.
+- Two fields added to the `RawPost` interface in `src/discourse.ts`, both optional.
 
 ## Error handling
 
@@ -71,5 +86,6 @@ staff flag Discourse sets on them never reaches a reader.
 ## Testing
 
 `authorBadge` is pure, so the table above becomes assertions directly: staff wins over
-trust level, TL1 and TL2 produce nothing, flair and trust combine, an empty post object
-returns an empty string.
+flair, `system` is never badged whatever its flags say, a trust level of 4 alone produces
+nothing, and an empty post object returns an empty string. `isAutomated` gets the four bot
+phrasings plus a real post that merely quotes one.

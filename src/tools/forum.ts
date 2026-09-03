@@ -105,7 +105,9 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: s
 /** Discourse's bot posts ("This topic was automatically closed…") never help a debugging agent. */
 export function isAutomated(post: RawPost): boolean {
   if (post.username !== "system") return false;
-  return /automatically closed|automatically deleted/i.test(post.cooked ?? "");
+  // "opened" was missing, so "This topic was automatically opened after 10 minutes" survived
+  // into staff threads and read as a reply. Match the whole family instead of two verbs.
+  return /this topic was automatically|automatically (closed|deleted|opened|bumped)/i.test(post.cooked ?? "");
 }
 
 /** Smallest slice that still leaves a post worth reading. */
@@ -132,9 +134,31 @@ export function renderWithin(
   return { body, shown: kept.length };
 }
 
+/**
+ * What a reader needs to weigh an answer: who wrote it. get_thread hoists the accepted
+ * answer, but "accepted" only means the asker clicked a button.
+ *
+ * Discourse's trust level is not part of this, though it looks like the obvious signal.
+ * Roblox does not use the promotion ladder: loleris, who wrote ProfileService and has 1567
+ * likes on the post, is TL1 — exactly like an account opened yesterday. The only accounts
+ * above TL1 are staff and the `system` bot, which the staff flag already identifies, so a
+ * trust badge would repeat one signal and mislead everywhere else.
+ */
+export function authorBadge(post: RawPost): string {
+  // Discourse marks its own bot as staff, and it posts "This topic was automatically
+  // opened" into staff threads. Labelling that "Roblox staff" reads as a Roblox employee
+  // endorsing the thread.
+  if (post.username === "system") return "";
+  if (post.staff === true || post.admin === true || post.moderator === true) {
+    return "Roblox staff";
+  }
+  return post.flair_name ?? "";
+}
+
 function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   const author = post.username ?? post.name ?? "unknown";
-  const role = post.staff || post.admin || post.moderator ? " (Roblox staff)" : "";
+  const badge = authorBadge(post);
+  const role = badge ? ` (${badge})` : "";
   const accepted = post.accepted_answer ? " ✅ ACCEPTED ANSWER" : "";
   const likes = post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
   const header = `--- #${post.post_number} by ${author}${role}${accepted} · ${relativeDate(post.created_at)}${likes ? ` · ${likes} likes` : ""}`;

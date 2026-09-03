@@ -590,3 +590,35 @@ test("an empty result names the filter that emptied it", async () => {
   assert.deepEqual(activeFilters({}), []);
   assert.deepEqual(activeFilters({ solved_only: false, tags: [] }), []);
 });
+
+test("authorBadge names only what a reader can act on", async () => {
+  const { authorBadge } = await import("../dist/tools/forum.js");
+
+  assert.equal(authorBadge({ staff: true, flair_name: "Roblox_Staff" }), "Roblox staff");
+  assert.equal(authorBadge({ admin: true }), "Roblox staff");
+  assert.equal(authorBadge({ moderator: true }), "Roblox staff");
+  assert.equal(authorBadge({ flair_name: "Programmers" }), "Programmers");
+
+  // Discourse flags its own bot as staff. "system (Roblox staff)" beside "This topic was
+  // automatically opened" reads as a Roblox employee endorsing the thread.
+  assert.equal(authorBadge({ username: "system", staff: true, trust_level: 4 }), "");
+
+  // Trust level is deliberately not a signal here: Roblox leaves everyone at TL1, including
+  // the author of ProfileService, so a badge would say nothing and imply something.
+  assert.equal(authorBadge({ trust_level: 4 }), "");
+  assert.equal(authorBadge({ trust_level: 1 }), "");
+
+  // Every field is optional and absent on some payloads: no badge, never a crash.
+  assert.equal(authorBadge({}), "");
+  assert.equal(authorBadge({ flair_name: null, staff: false }), "");
+});
+
+test("isAutomated catches the whole Discourse bot family", async () => {
+  const { isAutomated } = await import("../dist/tools/forum.js");
+  const bot = (text) => isAutomated({ username: "system", cooked: `<p>${text}</p>` });
+  assert.equal(bot("This topic was automatically closed after 30 days."), true);
+  assert.equal(bot("This topic was automatically opened after 10 minutes."), true);
+  assert.equal(bot("This topic was automatically deleted."), true);
+  assert.equal(bot("A real answer from a person."), false);
+  assert.equal(isAutomated({ username: "someone", cooked: "<p>automatically opened</p>" }), false);
+});
