@@ -185,8 +185,11 @@ export function registerUpdateTools(server: McpServer): void {
           return ok(`Roblox published nothing in the last ${args.days} days. Try a longer window.`);
         }
 
+        // The footer is part of what the caller receives, so it comes out of the same
+        // budget rather than being appended past it.
         const footer = "\n\nUse get_thread on any topic_id above to read the full post.";
-        return ok(truncate(sections.join("\n\n"), args.max_tokens, "lower `days` or `limit`") + footer);
+        const budget = Math.max(args.max_tokens - Math.ceil(footer.length / 4), 100);
+        return ok(truncate(sections.join("\n\n"), budget, "lower `days` or `limit`") + footer);
       } catch (err) {
         return toToolError("get_whats_new failed", err);
       }

@@ -559,6 +559,30 @@ test("rank keeps an on-topic thread above a better-looking off-topic one", () =>
   assert.ok(rank(spaced, [], false, undefined, ["ProximityPrompt not triggering"])[0].score > 100);
 });
 
+test("onTopicOnly drops results that only matched the query's filler words", async () => {
+  const { onTopicOnly } = await import("../dist/rank.js");
+  // The shape that broke: order:"likes" skips ranking, so "tween not working" came back
+  // sorted by like count with an analytics announcement on top, matched on "not working".
+  const topics = [
+    { id: 1, title: "Analytics: Break Down Your Client CPU Time By Category" },
+    { id: 2, title: "[Full Release] Styling Transitions" },
+    { id: 3, title: "Playing [Tween A] cancelling prevents [A] from working" },
+  ];
+  const posts = [
+    { id: 10, topic_id: 1, blurb: "a new Client CPU Time graph on the Performance page" },
+    { id: 20, topic_id: 2, blurb: "enables no-code UI tweens within the Styling ecosystem" },
+  ];
+  assert.deepEqual(
+    onTopicOnly(topics, posts, ["tween not working"]).map((t) => t.id),
+    [2, 3],
+  );
+
+  // A query with nothing distinctive left cannot filter, and a filter that empties the
+  // result hands back what it was given rather than claiming nothing matched.
+  assert.equal(onTopicOnly(topics, posts, ["is it not"]).length, 3);
+  assert.equal(onTopicOnly(topics, posts, ["datastore"]).length, 3);
+});
+
 test("distinctiveTerms drops the words that narrow nothing", async () => {
   const { distinctiveTerms } = await import("../dist/rank.js");
   assert.deepEqual(distinctiveTerms(["Why is my ProximityPrompt not triggering?"]), ["proximityprompt", "triggering"]);

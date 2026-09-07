@@ -201,3 +201,34 @@ export function rank(
 
   return ranked.sort((a, b) => b.score - a.score);
 }
+
+/**
+ * Drop results that carry none of the query's distinctive words.
+ *
+ * Only for the non-relevance orders. Discourse ANDs every term, so filler words alone can
+ * satisfy a query, and `order:likes` then sorts those weak matches to the top by like
+ * count: "tween not working" answered with an analytics announcement and a VS Code
+ * extension, neither of which mentions tweening — matched on "not" and "working". The
+ * relevance order scores this through titleMatch, but `originalOrder` skips scoring
+ * entirely, so the check has to happen before ranking.
+ *
+ * Returns the input untouched when the filter would empty the result — a thin list the
+ * caller can judge beats "no threads matched" for a query that did match something.
+ */
+export function onTopicOnly(topics: RawTopic[], posts: RawPost[], queries: string[]): RawTopic[] {
+  const terms = distinctiveTerms(queries);
+  if (terms.length === 0) return topics;
+  const blurbs = new Map<number, string>();
+  for (const post of posts) {
+    if (post.topic_id === undefined) continue;
+    const text = `${blurbs.get(post.topic_id) ?? ""} ${post.blurb ?? ""}`;
+    blurbs.set(post.topic_id, text);
+  }
+  const kept = topics.filter((topic) => {
+    const haystack = `${topic.title ?? ""} ${(topic.tags ?? []).join(" ")} ${blurbs.get(topic.id) ?? ""}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+    return terms.some((t) => haystack.includes(t));
+  });
+  return kept.length > 0 ? kept : topics;
+}

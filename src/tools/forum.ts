@@ -23,7 +23,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
-import { bugStatus, FILLER, likesOf, mergeResults, rank, replyCount } from "../rank.js";
+import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, rank, replyCount } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 /**
@@ -272,7 +272,9 @@ export function registerForumTools(server: McpServer): void {
           after: args.after,
           order: args.order,
         });
-        const topics = applyMinLikes(found, posts, args.min_likes);
+        const byOrder =
+          args.order === "relevance" ? found : onTopicOnly(found, posts, queries);
+        const topics = applyMinLikes(byOrder, posts, args.min_likes);
         const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
           const active = activeFilters(args);
@@ -287,7 +289,8 @@ export function registerForumTools(server: McpServer): void {
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
-        const head = `${ranked.length} DevForum threads for ${label}${queries.length > 1 ? ` (${queries.length} phrasings merged)` : ""}:`;
+        const sortedBy = args.order === "relevance" ? "" : `, ordered by ${args.order} rather than relevance`;
+        const head = `${ranked.length} DevForum threads for ${label}${queries.length > 1 ? ` (${queries.length} phrasings merged)` : ""}${sortedBy}:`;
         return ok(truncate(`${head}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_devforum failed", err);
