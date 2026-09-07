@@ -577,6 +577,18 @@ test("onTopicOnly drops results that only matched the query's filler words", asy
     [2, 3],
   );
 
+  // A term has to start where a word starts: "between" is not a thread about tweening.
+  const between = [{ id: 4, title: "Difference between server and client" }];
+  assert.equal(onTopicOnly(between, [], ["tween not working"]).length, 1); // fell back, not matched
+  assert.deepEqual(
+    onTopicOnly([...between, ...topics], posts, ["tween not working"]).map((t) => t.id),
+    [2, 3],
+  );
+
+  // Separators do not hide a name long enough to be unambiguous.
+  const spaced = [{ id: 5, title: "Proximity Prompt never fires" }, { id: 6, title: "Sound delay" }];
+  assert.deepEqual(onTopicOnly(spaced, [], ["ProximityPrompt not triggering"]).map((t) => t.id), [5]);
+
   // A query with nothing distinctive left cannot filter, and a filter that empties the
   // result hands back what it was given rather than claiming nothing matched.
   assert.equal(onTopicOnly(topics, posts, ["is it not"]).length, 3);

@@ -64,6 +64,10 @@ export const FILLER = new Set([
   "of", "for", "and", "or", "but", "my", "me", "i", "it", "its", "this", "that", "when", "why",
   "how", "does", "doesnt", "dont", "cant", "with", "without", "after", "before", "from", "any",
   "some", "get", "getting", "still", "keep", "keeps", "randomly", "sometimes", "issue", "problem",
+  // The symptom vocabulary every second thread on the forum uses. "tween not working" ranked
+  // a voxelizer resource and a Weekly Recap as hits because "working" appeared in a reply.
+  "work", "works", "working", "worked", "broken", "broke", "breaks", "breaking", "help", "please",
+  "trying", "tried", "need", "want", "make", "making", "use", "using", "way", "instead", "error",
 ]);
 
 /** The words in a query that actually say what it is about. */
@@ -221,14 +225,29 @@ export function onTopicOnly(topics: RawTopic[], posts: RawPost[], queries: strin
   const blurbs = new Map<number, string>();
   for (const post of posts) {
     if (post.topic_id === undefined) continue;
-    const text = `${blurbs.get(post.topic_id) ?? ""} ${post.blurb ?? ""}`;
-    blurbs.set(post.topic_id, text);
+    blurbs.set(post.topic_id, `${blurbs.get(post.topic_id) ?? ""} ${post.blurb ?? ""}`);
   }
   const kept = topics.filter((topic) => {
-    const haystack = `${topic.title ?? ""} ${(topic.tags ?? []).join(" ")} ${blurbs.get(topic.id) ?? ""}`
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-    return terms.some((t) => haystack.includes(t));
+    const text = `${topic.title ?? ""} ${(topic.tags ?? []).join(" ")} ${blurbs.get(topic.id) ?? ""}`.toLowerCase();
+    return terms.some((t) => carriesTerm(text, t));
   });
   return kept.length > 0 ? kept : topics;
+}
+
+/**
+ * Does this text actually talk about the term?
+ *
+ * The word has to start where a word starts: a plain substring test kept a voxelizer resource
+ * in the results for "tween" because its blurb said "between". Suffixes are free, so "tween"
+ * still matches "tweens" and "tweening".
+ *
+ * Long terms are also tried against the text with its separators stripped, which is how
+ * "ProximityPrompt" finds a title written "Proximity Prompt". That is only done from eight
+ * characters up, where a name is specific enough that landing inside another word is not a
+ * real risk.
+ */
+function carriesTerm(text: string, term: string): boolean {
+  // distinctiveTerms only ever yields [a-z0-9] words, so the term needs no escaping here.
+  if (new RegExp(`\\b${term}`).test(text)) return true;
+  return term.length >= 8 && text.replace(/[^a-z0-9]/g, "").includes(term);
 }
