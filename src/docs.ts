@@ -217,11 +217,17 @@ export function referenceSummary(yaml: string): string | undefined {
 /**
  * Members a datatype reference page lists, by bare name ("Magnitude", "new", "Cross").
  * Operator sections are written "- name: Vector3 * Vector3" and are skipped by the pattern.
+ *
+ * Either separator counts: the docs write properties as "Vector3.Magnitude" and methods as
+ * "Vector3:Cross", exactly as Luau calls them. Matching only the dot collected the
+ * properties and none of the methods, so check_api_health answered "the Vector3 datatype has
+ * no Cross" — and the same for Dot, Lerp, Angle and every CFrame method. Telling a model
+ * that working code calls a nonexistent API is the one answer this tool must never give.
  */
 export async function datatypeMembers(name: string): Promise<Set<string>> {
   const yaml = await fetchDoc(resolveDocPath(`reference/engine/datatypes/${name}.yaml`));
   const names = new Set<string>();
-  for (const m of yaml.matchAll(/^\s*-\s+name:\s+[A-Za-z0-9_]+\.([A-Za-z0-9_]+)\s*$/gm)) {
+  for (const m of yaml.matchAll(/^\s*-\s+name:\s+[A-Za-z0-9_]+[.:]([A-Za-z0-9_]+)\s*$/gm)) {
     if (m[1]) names.add(m[1]);
   }
   return names;
@@ -231,6 +237,26 @@ function snippetAround(text: string, index: number): string {
   const start = Math.max(0, index - 90);
   const raw = text.slice(start, start + 260).replace(/\s+/g, " ").trim();
   return `${start > 0 ? "…" : ""}${raw}${start + 260 < text.length ? "…" : ""}`;
+}
+
+/**
+ * How often `term` occurs in `text`, and where it first does.
+ *
+ * `text.split(term).length - 1` was the old count, which builds an array of every slice of
+ * a page that can run past 100 KB — once per query term, per candidate page. Walking with
+ * indexOf answers the same question without allocating anything, and returns the first
+ * position the caller then wanted anyway instead of scanning for it a second time.
+ */
+function countTerm(text: string, term: string): { count: number; first: number } {
+  let count = 0;
+  let first = -1;
+  let at = text.indexOf(term);
+  while (at >= 0) {
+    if (first < 0) first = at;
+    count += 1;
+    at = text.indexOf(term, at + term.length);
+  }
+  return { count, first };
 }
 
 /**
@@ -273,12 +299,11 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
       let hits = 0;
       let anchor = -1;
       for (const term of terms) {
-        const found = body.split(term).length - 1;
-        if (found > 0) {
+        const { count, first } = countTerm(body, term);
+        if (count > 0) {
           covered += 1;
-          hits += found;
-          const at = body.indexOf(term);
-          if (anchor < 0 || (found < 20 && at < anchor)) anchor = at;
+          hits += count;
+          if (anchor < 0 || (count < 20 && first < anchor)) anchor = first;
         }
       }
       hit.score += (covered / terms.length) * 60 + Math.min(hits, 25) * 1.5;
@@ -364,16 +389,47 @@ async function apiDump(): Promise<ApiDump> {
   return dumpPromise;
 }
 
+/**
+ * Lower-cased name -> entry, built once per dump.
+ *
+ * Every lookup used to walk the whole dump: check_api_health with 25 entries scanned ~1,700
+ * classes per entry, and each `classChain` call rebuilt a 1,700-entry Map only to follow
+ * three superclasses. The dump is fetched once and never mutated, so the index can be too.
+ */
+interface DumpIndex {
+  classesByLower: Map<string, ApiClass>;
+  classesByName: Map<string, ApiClass>;
+  enumsByLower: Map<string, { Name: string; Items?: Array<{ Name: string; Value: number }> }>;
+  classNames: string[];
+}
+
+let indexPromise: Promise<DumpIndex> | undefined;
+
+async function dumpIndex(): Promise<DumpIndex> {
+  indexPromise ??= (async () => {
+    const dump = await apiDump();
+    const classes = dump.Classes ?? [];
+    return {
+      classesByLower: new Map(classes.map((c) => [c.Name.toLowerCase(), c])),
+      classesByName: new Map(classes.map((c) => [c.Name, c])),
+      enumsByLower: new Map((dump.Enums ?? []).map((e) => [e.Name.toLowerCase(), e])),
+      classNames: classes.map((c) => c.Name),
+    };
+  })().catch((err: unknown) => {
+    // A failed fetch must not be remembered as "the dump has no classes".
+    indexPromise = undefined;
+    dumpPromise = undefined;
+    throw err;
+  });
+  return indexPromise;
+}
+
 export async function findClass(name: string): Promise<ApiClass | undefined> {
-  const dump = await apiDump();
-  const target = name.toLowerCase();
-  return dump.Classes?.find((c) => c.Name.toLowerCase() === target);
+  return (await dumpIndex()).classesByLower.get(name.toLowerCase());
 }
 
 export async function findEnum(name: string) {
-  const dump = await apiDump();
-  const target = name.toLowerCase();
-  return dump.Enums?.find((e) => e.Name.toLowerCase() === target);
+  return (await dumpIndex()).enumsByLower.get(name.toLowerCase());
 }
 
 /** Class names that look like the query, used when the exact lookup misses. */
@@ -404,10 +460,8 @@ export function nearestNames(target: string, known: Iterable<string>, limit = 6)
 }
 
 export async function suggestClasses(name: string, limit = 8): Promise<string[]> {
-  const dump = await apiDump();
   const target = name.toLowerCase();
-  return (dump.Classes ?? [])
-    .map((c) => c.Name)
+  return (await dumpIndex()).classNames
     .filter((n) => closeEnough(target, n.toLowerCase()))
     .sort(byCloseness(target))
     .slice(0, limit);
@@ -415,13 +469,16 @@ export async function suggestClasses(name: string, limit = 8): Promise<string[]>
 
 /** Walk the inheritance chain so inherited members stay visible. */
 export async function classChain(name: string): Promise<ApiClass[]> {
-  const dump = await apiDump();
-  const byName = new Map((dump.Classes ?? []).map((c) => [c.Name, c]));
+  const { classesByLower, classesByName } = await dumpIndex();
   const chain: ApiClass[] = [];
-  let current = byName.get((await findClass(name))?.Name ?? "");
-  while (current && chain.length < 12) {
+  let current = classesByLower.get(name.toLowerCase());
+  // A malformed dump could name itself as its own superclass; `seen` keeps that a bad
+  // answer rather than a hang, and the depth cap stays as the belt to its braces.
+  const seen = new Set<string>();
+  while (current && chain.length < 12 && !seen.has(current.Name)) {
+    seen.add(current.Name);
     chain.push(current);
-    current = current.Superclass ? byName.get(current.Superclass) : undefined;
+    current = current.Superclass ? classesByName.get(current.Superclass) : undefined;
   }
   return chain;
 }
@@ -469,6 +526,41 @@ export async function suggestMembers(className: string, memberName: string, limi
   return [...names].sort(byCloseness(target)).slice(0, limit);
 }
 
+/** Quote a caller-supplied name for use inside a RegExp; these arrive as raw tool input. */
+export function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Split a reference YAML page into its member entries, with the page's own fields first.
+ *
+ * Members are not the only `- name:` lines in the file: every parameter is one too, nested
+ * deeper. Splitting on all of them cut each member off at its own parameter list, so
+ * everything written below that — `deprecation_message` included — was filed under a
+ * fragment belonging to no member. Humanoid:LoadAnimation names its replacement right there
+ * in the docs and check_api_health still printed a bare "DEPRECATED".
+ *
+ * Members are the shallowest `- name:` lines on the page, so that indent is the boundary.
+ */
+export function splitMemberBlocks(yaml: string): string[] {
+  const indents = [...yaml.matchAll(/^([ \t]*)-[ \t]+name:[ \t]/gm)].map((m) => (m[1] ?? "").length);
+  if (indents.length === 0) return [yaml];
+  const top = Math.min(...indents);
+  const blocks: string[] = [];
+  let current = "";
+  for (const line of yaml.split("\n")) {
+    const at = /^([ \t]*)-[ \t]+name:[ \t]/.exec(line);
+    if (at && (at[1] ?? "").length === top) {
+      blocks.push(current);
+      current = line;
+    } else {
+      current += (current === "" ? "" : "\n") + line;
+    }
+  }
+  blocks.push(current);
+  return blocks;
+}
+
 /**
  * Pull a `deprecation_message` out of a reference YAML file. The dump marks members as
  * deprecated but never says what replaced them; the docs sometimes do.
@@ -476,9 +568,13 @@ export async function suggestMembers(className: string, memberName: string, limi
 export function parseDeprecationMessage(yaml: string, memberName?: string): string | undefined {
   // Reference YAML lists members as "  - name: Class.Member"; the class-level fields sit
   // above the first such entry.
-  const blocks = yaml.split(/\n(?=\s*-\s+name:\s)/);
+  const blocks = splitMemberBlocks(yaml);
+  // "Class.Property" but "Class:Method" — the docs use Luau's own call syntax, so a dot-only
+  // match found the deprecated properties and missed every deprecated method. The official
+  // replacement for Humanoid:LoadAnimation is written right there in the file, and the tool
+  // printed "DEPRECATED" with not a word on what to use instead.
   const block = memberName
-    ? blocks.find((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*\\.${memberName}\\s*$`, "m").test(b))
+    ? blocks.find((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*[.:]${escapeRe(memberName)}\\s*$`, "m").test(b))
     : blocks[0];
   if (!block) return undefined;
 

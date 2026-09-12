@@ -40,11 +40,30 @@ function newestFirst(topics: RawTopic[]): RawTopic[] {
   );
 }
 
-/** The recap archive, newest first, paged until `needed` are collected or the tag runs out. */
+/** How many pages of the recap tag are ever worth pulling. */
+const MAX_RECAP_PAGES = 6;
+
+/**
+ * The recap archive, newest first, paged until `needed` are collected or the tag runs out.
+ *
+ * Page 0 comes back first because it usually answers the call on its own — `week: 0` and
+ * the default get_whats_new never look further. Only when more is genuinely needed are the
+ * remaining pages fetched, and then all at once: stepping through them one await at a time
+ * made `before:` pay five round trips in a row for pages that do not depend on each other.
+ */
 async function recapArchive(needed: number): Promise<RawTopic[]> {
-  const all: RawTopic[] = [];
-  for (let page = 0; page < 6 && all.length < needed; page += 1) {
-    const batch = await listTopics("latest", undefined, WEEKLY_RECAP_TAG, undefined, page);
+  const first = await listTopics("latest", undefined, WEEKLY_RECAP_TAG, undefined, 0);
+  if (first.length === 0 || first.length >= needed) return newestFirst(first);
+
+  const rest = await Promise.all(
+    Array.from({ length: MAX_RECAP_PAGES - 1 }, (_, i) =>
+      listTopics("latest", undefined, WEEKLY_RECAP_TAG, undefined, i + 1),
+    ),
+  );
+  const all = [...first];
+  // Stop at the first empty page: anything past the end of the tag is a duplicate risk,
+  // not more archive.
+  for (const batch of rest) {
     if (batch.length === 0) break;
     all.push(...batch);
   }

@@ -601,7 +601,13 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const categories = await listCategories();
+        // The tag list does not depend on the tree, and fetching it after cost a whole
+        // round trip for nothing — this tool is the one an agent calls when it is already
+        // unsure which slug to use, so it is on the critical path twice.
+        const [categories, tags] = await Promise.all([
+          listCategories(),
+          args.include_tags ? listTags() : Promise.resolve([]),
+        ]);
         const tree = categories
           .map((c) => {
             const subs = c.subcategories.map((s) => `    - ${s.slug} (${s.id})`).join("\n");
@@ -610,7 +616,6 @@ export function registerForumTools(server: McpServer): void {
           .join("\n");
         let out = `DevForum categories (slug and id):\n${tree}`;
         if (args.include_tags) {
-          const tags = await listTags();
           out += `\n\nMost-used tags:\n${tags.slice(0, args.tag_limit).map((t) => `${t.name} (${t.count})`).join(", ")}`;
         }
         return ok(out);

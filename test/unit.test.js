@@ -737,3 +737,110 @@ test("nearestNames offers only names close enough to be a real suggestion", asyn
   // A bare substring test would match "Dot" inside anything; short names must not be noise.
   assert.deepEqual(nearestNames("TotallyFakeMember", members), []);
 });
+
+test("the concurrency gate never lets more than the limit through", async () => {
+  const { getJson, clearCache } = await import("../dist/http.js");
+  const limit = 4; // DEVFORUM_CONCURRENCY's default
+  let active = 0;
+  let peak = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 5));
+    active -= 1;
+    return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+  };
+  try {
+    clearCache();
+    // Distinct URLs, so coalescing cannot hide an over-subscribed gate.
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) => getJson(`https://devforum.roblox.com/x/${i}.json`, 0)),
+    );
+  } finally {
+    globalThis.fetch = original;
+    clearCache();
+  }
+  assert.ok(peak <= limit, `peaked at ${peak} concurrent requests, limit is ${limit}`);
+});
+
+test("concurrent requests for the same URL are fetched once", async () => {
+  const { getText, clearCache } = await import("../dist/http.js");
+  let calls = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    await new Promise((r) => setTimeout(r, 5));
+    return new Response("page body");
+  };
+  try {
+    clearCache();
+    // check_api_health with eight Humanoid members asked for Humanoid.yaml eight times at
+    // once; none had landed yet, so every one of them missed the cache and downloaded it.
+    const all = await Promise.all(Array.from({ length: 8 }, () => getText("https://cdn.test/doc.md", 0)));
+    assert.deepEqual(new Set(all), new Set(["page body"]));
+  } finally {
+    globalThis.fetch = original;
+    clearCache();
+  }
+  assert.equal(calls, 1);
+});
+
+test("splitMemberBlocks cuts at members, not at their parameters", async () => {
+  const { splitMemberBlocks } = await import("../dist/docs.js");
+  const yaml = [
+    "name: Humanoid",
+    "type: class",
+    "methods:",
+    "  - name: Humanoid:LoadAnimation",
+    "    parameters:",
+    "      - name: animation",
+    "        type: Animation",
+    "    tags:",
+    "      - Deprecated",
+    "    deprecation_message: |",
+    "      Use Animator:LoadAnimation instead.",
+    "  - name: Humanoid:MoveTo",
+    "    summary: |",
+    "      Moves the humanoid.",
+    "",
+  ].join("\n");
+  const blocks = splitMemberBlocks(yaml);
+  // A parameter is a "- name:" line too. Splitting on those as well cut LoadAnimation off
+  // above its own deprecation_message, so the replacement never reached the caller.
+  assert.equal(blocks.length, 3, "page header plus one block per member");
+  assert.match(blocks[1], /LoadAnimation/);
+  assert.match(blocks[1], /Use Animator:LoadAnimation instead\./);
+  assert.match(blocks[2], /MoveTo/);
+});
+
+test("a deprecated method's replacement is found, not just a property's", async () => {
+  const { parseDeprecationMessage } = await import("../dist/docs.js");
+  const yaml = [
+    "name: Humanoid",
+    "properties:",
+    "  - name: Humanoid.Torso",
+    "    deprecation_message: |",
+    "      Use Humanoid.RootPart instead.",
+    "methods:",
+    "  - name: Humanoid:LoadAnimation",
+    "    parameters:",
+    "      - name: animation",
+    "    deprecation_message: |",
+    "      Use Animator:LoadAnimation instead.",
+    "",
+  ].join("\n");
+  // The docs write properties with a dot and methods with a colon, and the matcher only
+  // accepted the dot — so every deprecated method printed "DEPRECATED" and no replacement.
+  assert.equal(parseDeprecationMessage(yaml, "Torso"), "Use Humanoid.RootPart instead.");
+  assert.equal(parseDeprecationMessage(yaml, "LoadAnimation"), "Use Animator:LoadAnimation instead.");
+  assert.equal(parseDeprecationMessage(yaml, "NotAMember"), undefined);
+});
+
+test("escapeRe keeps a nonsense member name from breaking the lookup", async () => {
+  const { escapeRe, parseDeprecationMessage } = await import("../dist/docs.js");
+  assert.equal(escapeRe("a[b"), "a\\[b");
+  // "Vector3.a[" used to build a regex that does not compile, turning a lookup that should
+  // answer "no such member" into a thrown tool error.
+  assert.doesNotThrow(() => parseDeprecationMessage("name: X\n", "a["));
+});

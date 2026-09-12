@@ -7,6 +7,7 @@ import {
   cleanReferenceYaml,
   datatypeMembers,
   docUrl,
+  escapeRe,
   fetchDoc,
   findClass,
   findEnum,
@@ -16,6 +17,7 @@ import {
   searchDocs,
   securityOf,
   signature,
+  splitMemberBlocks,
   suggestClasses,
   suggestMembers,
   resolveMember,
@@ -35,11 +37,15 @@ const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: fa
  * that; anything above the first is the datatype's own summary and is always kept.
  */
 function filterDatatypeMembers(page: string, memberName: string): string {
-  const blocks = page.split(/\n(?=\s*-\s+name:\s)/);
+  // Member entries only: a parameter is a `- name:` line too, and splitting on those cut
+  // each member off above its own returns and code samples.
+  const blocks = splitMemberBlocks(page);
   const header = blocks[0] ?? "";
   const wanted = blocks
     .slice(1)
-    .filter((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*\\b${memberName}\\s*$`, "im").test(b));
+    // Escaped: the member comes straight from `name`, and "Vector3.a[" built a regex that
+    // does not compile, turning a nonsense lookup into a thrown tool error.
+    .filter((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*\\b${escapeRe(memberName)}\\s*$`, "im").test(b));
   // No block matched: the member may be written differently on this page, and half a page is
   // a worse answer than the whole one.
   if (wanted.length === 0) return page;

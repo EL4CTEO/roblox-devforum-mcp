@@ -137,13 +137,21 @@ async function acquire(host: string): Promise<void> {
     return;
   }
   await new Promise<void>((resolve) => gate.queue.push(resolve));
-  gate.active += 1;
 }
 
+/**
+ * The slot is handed straight to the next waiter rather than freed and re-taken.
+ *
+ * A waiter used to increment `active` itself, one microtask after being resolved, so a
+ * caller arriving in that gap saw a count that was briefly one too low and went through —
+ * letting more requests than the limit hit the forum at once, which is the whole point of
+ * the cap.
+ */
 function release(host: string): void {
   const gate = gateFor(host);
-  gate.active -= 1;
-  gate.queue.shift()?.();
+  const next = gate.queue.shift();
+  if (next) next(); // the slot stays claimed: active is unchanged
+  else gate.active -= 1;
 }
 
 function safeHost(url: string): string {
@@ -232,14 +240,37 @@ function isAbort(err: unknown): boolean {
   return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
+/* ---------------------------- request coalescing --------------------------- */
+
+/**
+ * One in-flight request per URL, shared by everyone who asks for it meanwhile.
+ *
+ * The TTL cache only helps the second caller if the first has already finished, and a tool
+ * call fans out: check_api_health with eight Humanoid members fired eight identical
+ * downloads of Humanoid.yaml, all at once, all missing the cache because none had landed
+ * yet. They queued behind each other on the concurrency gate too, so the call paid for the
+ * same file eight times over. Sharing the promise makes the extra seven free.
+ */
+const inflight = new Map<string, Promise<unknown>>();
+
+function coalesce<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const running = inflight.get(key) as Promise<T> | undefined;
+  if (running) return running;
+  const promise = load().finally(() => inflight.delete(key));
+  inflight.set(key, promise);
+  return promise;
+}
+
 /** Cached JSON GET. */
 export async function getJson<T>(url: string, ttl: number = TTL.search): Promise<T> {
   const cached = cacheGet<T>(url);
   if (cached !== undefined) return cached;
-  const res = await request(url, {});
-  const data = (await res.json()) as T;
-  cacheSet(url, data, ttl);
-  return data;
+  return coalesce(url, async () => {
+    const res = await request(url, {});
+    const data = (await res.json()) as T;
+    cacheSet(url, data, ttl);
+    return data;
+  });
 }
 
 /** Cached text GET. */
@@ -247,10 +278,12 @@ export async function getText(url: string, ttl: number = TTL.static): Promise<st
   const key = `text:${url}`;
   const cached = cacheGet<string>(key);
   if (cached !== undefined) return cached;
-  const res = await request(url, { accept: "text/plain, text/markdown, */*" });
-  const text = await res.text();
-  cacheSet(key, text, ttl);
-  return text;
+  return coalesce(key, async () => {
+    const res = await request(url, { accept: "text/plain, text/markdown, */*" });
+    const text = await res.text();
+    cacheSet(key, text, ttl);
+    return text;
+  });
 }
 
 /**
@@ -264,11 +297,13 @@ export async function getGithubJson<T>(url: string, ttl: number = TTL.static): P
   const key = `gh:${url}`;
   const cached = cacheGet<T>(key);
   if (cached !== undefined) return cached;
-  const res = await request(url, {
-    accept: "application/vnd.github+json",
-    "x-github-api-version": "2022-11-28",
+  return coalesce(key, async () => {
+    const res = await request(url, {
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+    });
+    const data = (await res.json()) as T;
+    cacheSet(key, data, ttl);
+    return data;
   });
-  const data = (await res.json()) as T;
-  cacheSet(key, data, ttl);
-  return data;
 }

@@ -60,3 +60,16 @@ test("an unparseable topic reference returns a tool error, not a throw", async (
   assert.match(res.content[0].text, /topic id/i);
   await close();
 });
+
+test("the version announced in the handshake is the one in package.json", async () => {
+  const { readFileSync } = await import("node:fs");
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const { client, close } = await connect();
+  try {
+    // These used to be two hand-written strings and they drifted: package.json said 1.2.7
+    // while the handshake still announced 1.2.6 to every client that asked.
+    assert.equal(client.getServerVersion()?.version, pkg.version);
+  } finally {
+    await close();
+  }
+});

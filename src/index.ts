@@ -4,7 +4,7 @@
  * creator documentation so an AI agent can debug Roblox games against real answers.
  */
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { argv } from "node:process";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -14,7 +14,25 @@ import { registerForumTools } from "./tools/forum.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerUpdateTools } from "./tools/updates.js";
 
-const VERSION = "1.2.6";
+/**
+ * The version reported over MCP, read from package.json rather than written out again here.
+ *
+ * The two spellings drifted: package.json said 1.2.7 while the handshake still announced
+ * 1.2.6, so every client — and every bug report quoting one — named the wrong release. The
+ * file sits next to dist/ in the published package and in the repo alike.
+ */
+function readVersion(): string {
+  try {
+    const path = fileURLToPath(new URL("../package.json", import.meta.url));
+    const { version } = JSON.parse(readFileSync(path, "utf8")) as { version?: string };
+    if (typeof version === "string" && version) return version;
+  } catch {
+    /* a server that cannot read its own version still has a forum to search */
+  }
+  return "0.0.0";
+}
+
+const VERSION = readVersion();
 
 export function createServer(): McpServer {
   const server = new McpServer(
