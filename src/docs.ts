@@ -113,10 +113,15 @@ export function cleanDocProse(text: string, sourcePath?: string): string {
   // Class./Datatype./Global./Library. are renderer syntax with no Luau meaning; the
   // "Class.Constraint|Constraints" form carries the words to show after the pipe. Enum.X
   // without a pipe is left alone: it is valid Luau, so stripping it would corrupt real code.
+  //
+  // A method reference writes its call parens before the pipe —
+  // "Datatype.Vector3:Cross()|Cross()" — and matching the pipe only straight after the name
+  // left both halves on the page: Vector3's own summary reached the caller reading
+  // "Vector3:Cross()|Cross()", and Humanoid's page carries twenty of them.
   const s = stripMdx(text).replace(
-    /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(?:\|([^`\n]*)(?=`))?/g,
-    (whole, kind: string, name: string, display?: string) =>
-      display !== undefined ? display : kind === "Enum" ? whole : name,
+    /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(\(\))?(?:\|([^`\n]*)(?=`))?/g,
+    (whole, kind: string, name: string, parens: string | undefined, display?: string) =>
+      display !== undefined ? display : kind === "Enum" ? whole : `${name}${parens ?? ""}`,
   );
   const cut = sourcePath?.lastIndexOf("/") ?? -1;
   const dir = sourcePath !== undefined && cut > 0 ? sourcePath.slice(0, cut) : undefined;

@@ -844,3 +844,16 @@ test("escapeRe keeps a nonsense member name from breaking the lookup", async () 
   // answer "no such member" into a thrown tool error.
   assert.doesNotThrow(() => parseDeprecationMessage("name: X\n", "a["));
 });
+
+test("cleanDocProse unwraps a method reference that carries its call parens", async () => {
+  const { cleanDocProse } = await import("../dist/docs.js");
+  // The renderer writes the parens before the pipe, and matching the pipe only straight
+  // after the name left both halves on the page: Vector3's summary reached the caller
+  // reading "Vector3:Cross()|Cross()", and Humanoid's page carries twenty of them.
+  assert.equal(cleanDocProse("see `Datatype.Vector3:Cross()|Cross()` for this"), "see `Cross()` for this");
+  assert.equal(cleanDocProse("`Class.Humanoid:MoveTo()|MoveTo()`"), "`MoveTo()`");
+  // No pipe: the call keeps its parens rather than losing them with the prefix.
+  assert.equal(cleanDocProse("call `Datatype.CFrame.fromEulerAnglesXYZ()`"), "call `CFrame.fromEulerAnglesXYZ()`");
+  // Enum.X stays whole either way — it is valid Luau, not renderer syntax.
+  assert.equal(cleanDocProse("use `Enum.Material.Neon`"), "use `Enum.Material.Neon`");
+});
