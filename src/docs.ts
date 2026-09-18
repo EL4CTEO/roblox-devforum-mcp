@@ -104,6 +104,14 @@ function docLinkUrl(href: string, dir: string | undefined): string | undefined {
 }
 
 /**
+ * The docs put the global functions under namespaces of their own —
+ * "Global.LuaGlobals.pcall()", "Global.RobloxGlobals.warn()" — but Luau has no such table:
+ * the callable is `pcall()`. Stripping only the "Global." left "LuaGlobals.pcall()" on the
+ * page, which is a path no script can call.
+ */
+const GLOBAL_CONTAINER = /^(?:LuaGlobals|RobloxGlobals)[.:]/;
+
+/**
  * Docs prose is written for the create.roblox.com renderer, not for a reader: it carries
  * `Class.X` cross-reference syntax and repo-relative links like
  * "[notes](../../../physics/mover-constraints.md)". Left alone those reach the caller as
@@ -121,7 +129,11 @@ export function cleanDocProse(text: string, sourcePath?: string): string {
   const s = stripMdx(text).replace(
     /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(\(\))?(?:\|([^`\n]*)(?=`))?/g,
     (whole, kind: string, name: string, parens: string | undefined, display?: string) =>
-      display !== undefined ? display : kind === "Enum" ? whole : `${name}${parens ?? ""}`,
+      display !== undefined
+        ? display
+        : kind === "Enum"
+          ? whole
+          : `${kind === "Global" ? name.replace(GLOBAL_CONTAINER, "") : name}${parens ?? ""}`,
   );
   const cut = sourcePath?.lastIndexOf("/") ?? -1;
   const dir = sourcePath !== undefined && cut > 0 ? sourcePath.slice(0, cut) : undefined;
@@ -619,12 +631,32 @@ export async function deprecationNote(className: string, memberName?: string): P
   }
 }
 
-export function securityOf(member: ApiMember): string | undefined {
+export interface MemberSecurity {
+  /** The level itself, e.g. "PluginSecurity", or both joined when they differ. */
+  level: string;
+  /** Which half of the access the level covers. */
+  scope: "all" | "read" | "write";
+}
+
+/**
+ * The security a member sits behind, and which half of the access it covers.
+ *
+ * The dump states Read and Write separately and they often disagree: 71 members are
+ * { Read: "None", Write: "PluginSecurity" } — a game script reads them perfectly well and
+ * only a plugin can set them. Collapsing the two into one level had check_api_health report
+ * Workspace.FallenPartsDestroyHeight as "normal game scripts cannot use this", which is
+ * wrong in the direction that costs the caller a working API.
+ */
+export function securityOf(member: ApiMember): MemberSecurity | undefined {
   const sec = member.Security;
   if (!sec) return undefined;
-  if (typeof sec === "string") return sec === "None" ? undefined : sec;
-  const parts = [sec.Read, sec.Write].filter((s): s is string => Boolean(s) && s !== "None");
-  return parts.length ? [...new Set(parts)].join("/") : undefined;
+  if (typeof sec === "string") return sec === "None" ? undefined : { level: sec, scope: "all" };
+  const read = sec.Read && sec.Read !== "None" ? sec.Read : undefined;
+  const write = sec.Write && sec.Write !== "None" ? sec.Write : undefined;
+  if (read && write) return { level: [...new Set([read, write])].join("/"), scope: "all" };
+  if (read) return { level: read, scope: "read" };
+  if (write) return { level: write, scope: "write" };
+  return undefined;
 }
 
 export function signature(member: ApiMember): string {

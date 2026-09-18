@@ -219,7 +219,25 @@ test("signature and securityOf format API dump members", () => {
   );
   assert.equal(signature({ MemberType: "Property", Name: "Health", ValueType: { Name: "float" } }), "Health: float");
   assert.equal(securityOf({ MemberType: "Property", Name: "X", Security: { Read: "None", Write: "None" } }), undefined);
-  assert.equal(securityOf({ MemberType: "Function", Name: "X", Security: "RobloxScriptSecurity" }), "RobloxScriptSecurity");
+  assert.deepEqual(securityOf({ MemberType: "Function", Name: "X", Security: "RobloxScriptSecurity" }), {
+    level: "RobloxScriptSecurity",
+    scope: "all",
+  });
+  // Read and Write disagree on 71 members: Workspace.FallenPartsDestroyHeight is one a game
+  // script reads freely and only a plugin can set. Joining the two levels reported it as
+  // "normal game scripts cannot use this" — wrong about an API that works.
+  assert.deepEqual(securityOf({ MemberType: "Property", Name: "X", Security: { Read: "None", Write: "PluginSecurity" } }), {
+    level: "PluginSecurity",
+    scope: "write",
+  });
+  assert.deepEqual(securityOf({ MemberType: "Property", Name: "X", Security: { Read: "PluginSecurity", Write: "None" } }), {
+    level: "PluginSecurity",
+    scope: "read",
+  });
+  assert.deepEqual(
+    securityOf({ MemberType: "Property", Name: "X", Security: { Read: "RobloxScriptSecurity", Write: "RobloxScriptSecurity" } }),
+    { level: "RobloxScriptSecurity", scope: "all" },
+  );
 });
 
 test("queryTerms drops stopwords but never returns nothing", () => {
@@ -856,4 +874,125 @@ test("cleanDocProse unwraps a method reference that carries its call parens", as
   assert.equal(cleanDocProse("call `Datatype.CFrame.fromEulerAnglesXYZ()`"), "call `CFrame.fromEulerAnglesXYZ()`");
   // Enum.X stays whole either way — it is valid Luau, not renderer syntax.
   assert.equal(cleanDocProse("use `Enum.Material.Neon`"), "use `Enum.Material.Neon`");
+});
+
+test("cleanDocProse drops the namespace the docs file globals under", async () => {
+  const { cleanDocProse } = await import("../dist/docs.js");
+  // Luau has no LuaGlobals table: the callable is pcall(). Stripping only the "Global."
+  // handed the caller "LuaGlobals.pcall()", a path no script can call — and the docs use
+  // this form about eighty times, error-codes-and-limits included.
+  assert.equal(cleanDocProse("wrap it in `Global.LuaGlobals.pcall()`"), "wrap it in `pcall()`");
+  assert.equal(cleanDocProse("`Global.RobloxGlobals.warn()`"), "`warn()`");
+  assert.equal(cleanDocProse("`Global.LuaGlobals.require`"), "`require`");
+  // A pipe still wins, and a genuine Library reference keeps the table it really has.
+  assert.equal(cleanDocProse("`Global.LuaGlobals.pcall()|pcall()`"), "`pcall()`");
+  assert.equal(cleanDocProse("`Library.table.insert()`"), "`table.insert()`");
+});
+
+test("childSlugs lists only a category's own children", async () => {
+  const { childSlugs, bugAreas } = await import("../dist/discourse.js");
+  const children = childSlugs("bug-reports");
+  assert.ok(children.includes("engine-bugs"));
+  assert.ok(children.includes("cloud-services-bugs"));
+  assert.ok(!children.includes("bug-reports"), "a parent is not its own child");
+  assert.ok(!children.includes("scripting-support"));
+  // bugAreas is the parent plus exactly those children, and nothing else.
+  assert.deepEqual(bugAreas(), ["bug-reports", ...children]);
+  assert.equal(childSlugs("scripting-support").length, 0);
+});
+
+test("an Enum entry is checked down to the item, not just the enum", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+  // "Enum.Material.TotallyFakeMaterial" used to answer "OK — Enum.Material exists" and be
+  // counted under "all APIs are current and usable"; a fabricated EnumItem is exactly what
+  // this tool exists to catch. The entry has to keep the item for that check to be possible.
+  const item = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(splitApiEntry("Enum.Material.Neon").raw);
+  assert.equal(item?.[1], "Material");
+  assert.equal(item?.[2], "Neon");
+  // The colon spelling a model writes, and the bare enum, both still resolve.
+  assert.equal(/^Enum\.([A-Za-z0-9_]+)/.exec(splitApiEntry("Enum.KeyCode:ButtonA").raw)?.[1], "KeyCode");
+  assert.equal(
+    /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(splitApiEntry("Enum.RaycastFilterType").raw)?.[2],
+    undefined,
+  );
+});
+
+test("a timed-out parent-category search falls back to its sub-categories", async () => {
+  const { search } = await import("../dist/discourse.js");
+  const { clearCache } = await import("../dist/http.js");
+  const original = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const q = new URL(url).searchParams.get("q") ?? "";
+    if (url.includes("/site.json")) {
+      return new Response('{"categories":[]}', { headers: { "content-type": "application/json" } });
+    }
+    asked.push(q);
+    // Discourse answers a parent category by expanding it to every child, and on a common
+    // term that runs past the timeout while each child answers in about a second.
+    if (q.includes("#bug-reports")) {
+      const abort = new Error("aborted");
+      abort.name = "AbortError";
+      throw abort;
+    }
+    const id = asked.length;
+    return new Response(
+      JSON.stringify({ topics: [{ id, title: `hit ${q}` }], posts: [{ id, post_number: 1, topic_id: id }] }),
+      { headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    clearCache();
+    const { topics, posts } = await search({ query: "datastore", category: "bug-reports" });
+    // The call used to fail outright; now it answers from the children instead.
+    assert.ok(topics.length > 0, "the fan-out returned nothing");
+    assert.ok(asked.some((q) => q.includes("#engine-bugs")), "engine-bugs was not searched");
+    assert.ok(asked.some((q) => q.includes("#cloud-services-bugs")), "cloud-services-bugs was not searched");
+    assert.equal(new Set(topics.map((t) => t.id)).size, topics.length, "topics are deduplicated");
+    assert.equal(new Set(posts.map((p) => p.id)).size, posts.length, "posts are deduplicated");
+  } finally {
+    globalThis.fetch = original;
+    clearCache();
+  }
+});
+
+test("a timeout with nothing to fan out to is still a timeout", async () => {
+  const { search } = await import("../dist/discourse.js");
+  const { clearCache, isTimeout } = await import("../dist/http.js");
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes("/site.json")) {
+      return new Response('{"categories":[]}', { headers: { "content-type": "application/json" } });
+    }
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    throw abort;
+  };
+  try {
+    clearCache();
+    // scripting-support has no children, so there is no cheaper search to fall back on and
+    // the caller has to hear that the forum did not answer rather than "nothing matched".
+    await assert.rejects(
+      () => search({ query: "datastore", category: "scripting-support" }),
+      (err) => isTimeout(err),
+    );
+  } finally {
+    globalThis.fetch = original;
+    clearCache();
+  }
+});
+
+test("a screenshot keeps the caption its poster gave it", () => {
+  // Discourse wraps an upload in a lightbox, and the whole wrapper used to go: a reply that
+  // is one screenshot rendered as its lead-in sentence and nothing else, which reads as an
+  // empty post rather than one holding a picture the reader cannot see.
+  const cooked =
+    '<p>Here is an example:</p>\n<p><div class="lightbox-wrapper"><a class="lightbox" href="//uploads/original/a.png" title="issue at hand"><img src="//uploads/optimized/a.png" alt="issue at hand" width="690" height="346"><div class="meta">meta chrome</div></a></div></p>';
+  const md = htmlToMarkdown(cooked);
+  assert.match(md, /Here is an example:/);
+  assert.match(md, /\[image: issue at hand\]/);
+  assert.doesNotMatch(md, /lightbox|uploads|meta chrome/);
+  // An upload with no alt still says a picture was there.
+  const noAlt = htmlToMarkdown('<div class="lightbox-wrapper"><a class="lightbox" href="//x.png"><img src="//x.png"></a></div>');
+  assert.equal(noAlt, "[image]");
 });

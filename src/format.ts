@@ -29,6 +29,20 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
     : s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"[\s\S]*?<\/aside>/gi, "\n[quoted earlier reply]\n");
   s = s.replace(/<aside\b[\s\S]*?<\/aside>/gi, "");
   s = s.replace(/<(script|style|svg|noscript)\b[\s\S]*?<\/\1>/gi, "");
+  // Discourse wraps an uploaded screenshot in <div class="lightbox-wrapper"><a><img alt=…>.
+  // The wrapper is chrome, but the alt is what the poster titled the screenshot, and dropping
+  // the whole div dropped that with it: a reply that is one screenshot came out as its lead-in
+  // sentence and then nothing — "Here is an example of how the issue comes about in my
+  // servers:" followed by blank, which reads as a post with no content rather than one holding
+  // a picture. A bare <img> already became "[image: …]" further down; this is the same picture,
+  // only wrapped.
+  s = s.replace(
+    /<div\b[^>]*class="[^"]*lightbox-wrapper[^"]*"[\s\S]*?(<img\b[^>]*>)[\s\S]*?<\/a>/gi,
+    (_m, img: string) => {
+      const alt = /\balt="([^"]*)"/i.exec(img)?.[1];
+      return alt ? `\n[image: ${alt}]\n` : "\n[image]\n";
+    },
+  );
   s = s.replace(/<div\b[^>]*class="[^"]*(lightbox-wrapper|meta|onebox-body)[^"]*"[\s\S]*?<\/div>/gi, "");
 
   // Fenced code: <pre><code class="lang-lua">…</code></pre>

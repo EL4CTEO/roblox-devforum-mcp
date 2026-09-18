@@ -360,8 +360,13 @@ export function registerForumTools(server: McpServer): void {
           // the filter cost before saying Roblox has nothing.
           const filters = activeFilters({ after: args.after, area: area.slug });
           if (filters.length > 0) {
-            const wider = await runQueries(queries, { category: BUG_PARENT });
-            if (wider.topics.length > 0) {
+            // Best effort only. This call exists to explain an empty result, so letting it
+            // throw turned a finished answer into a failure: "datastore after:2030-01-01"
+            // searched fine, matched nothing, and then reported a 12-second timeout from the
+            // unfiltered retry — naming a URL the caller never asked for and telling them to
+            // drop the filter that dropping had just failed on.
+            const wider = await runQueries(queries, { category: BUG_PARENT }).catch(() => undefined);
+            if (wider && wider.topics.length > 0) {
               return ok(
                 `No bug reports matched ${label} ${filters.join(" and ")} — but ${wider.topics.length} matched without that filter, so this is the filter and not the absence of a report. Widen or drop it.`,
               );

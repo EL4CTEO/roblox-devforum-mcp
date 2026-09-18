@@ -3,6 +3,7 @@
 import {
   categoryPath,
   categoryTree,
+  childSlugs,
   ensureCategories,
   type Category,
   type CategorySlug,
@@ -14,6 +15,7 @@ export {
   bugAreas,
   CATEGORIES,
   categoryTree,
+  childSlugs,
   DEFAULT_SLUGS,
   categoryName,
   categoryPath,
@@ -141,12 +143,77 @@ export async function search(opts: SearchOptions): Promise<{ topics: RawTopic[];
   try {
     return await runSearch(opts);
   } catch (err) {
-    if (!opts.solvedOnly || !isTimeout(err)) throw err;
-    const { topics, posts } = await runSearch({ ...opts, solvedOnly: false });
-    const solved = topics.filter((t) => t.has_accepted_answer);
-    const kept = new Set(solved.map((t) => t.id));
-    return { topics: solved, posts: posts.filter((p) => p.topic_id === undefined || kept.has(p.topic_id)) };
+    if (!isTimeout(err)) throw err;
+    if (opts.solvedOnly) {
+      const relaxed = await runSearch({ ...opts, solvedOnly: false }).catch(() => undefined);
+      if (relaxed) {
+        const solved = relaxed.topics.filter((t) => t.has_accepted_answer);
+        const kept = new Set(solved.map((t) => t.id));
+        return {
+          topics: solved,
+          posts: relaxed.posts.filter((p) => p.topic_id === undefined || kept.has(p.topic_id)),
+        };
+      }
+    }
+    const perChild = await searchSubCategories(opts);
+    if (perChild) return perChild;
+    throw err;
   }
+}
+
+/**
+ * Re-run a timed-out parent-category search against that category's children.
+ *
+ * Discourse answers "#bug-reports" by expanding it to every sub-category, and on a common
+ * term that costs six to ten times what one child costs: "datastore #bug-reports" runs past
+ * the timeout while engine-bugs, studio-bugs and cloud-services-bugs each answer in about a
+ * second. So search_bugs for a single ordinary word — the most natural call the tool has —
+ * failed outright. Asking the children directly is the same search, in parallel, inside the
+ * budget. The per-host gate caps how many of those actually fly at once, so widening the
+ * fan-out never turns into a burst at the forum.
+ *
+ * Returns undefined when there is nothing to fan out to, and the caller rethrows the timeout.
+ */
+async function searchSubCategories(
+  opts: SearchOptions,
+): Promise<{ topics: RawTopic[]; posts: RawPost[] } | undefined> {
+  if (!opts.category) return undefined;
+  await ensureCategories();
+  const children = childSlugs(opts.category);
+  if (children.length === 0) return undefined;
+
+  const settled = await Promise.allSettled(
+    children.map((category) => runSearch({ ...opts, category })),
+  );
+  const sets = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+  if (sets.length === 0) return undefined;
+
+  // Round-robin rather than one category after another, so a topic's position still reflects
+  // its rank inside its own category instead of which category merged first — the ranker
+  // reads that position, and concatenating would hand engine-bugs every top slot.
+  const topics: RawTopic[] = [];
+  const seenTopics = new Set<number>();
+  const deepest = Math.max(...sets.map((set) => set.topics.length));
+  for (let i = 0; i < deepest; i += 1) {
+    for (const set of sets) {
+      const topic = set.topics[i];
+      if (topic && !seenTopics.has(topic.id)) {
+        seenTopics.add(topic.id);
+        topics.push(topic);
+      }
+    }
+  }
+
+  const posts: RawPost[] = [];
+  const seenPosts = new Set<number>();
+  for (const set of sets) {
+    for (const post of set.posts) {
+      if (seenPosts.has(post.id)) continue;
+      seenPosts.add(post.id);
+      posts.push(post);
+    }
+  }
+  return { topics, posts };
 }
 
 export async function getTopic(topicId: number): Promise<TopicResponse> {

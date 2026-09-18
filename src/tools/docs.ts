@@ -162,12 +162,25 @@ export function registerDocsTools(server: McpServer): void {
             const { raw, className, memberName } = splitApiEntry(entry);
 
             // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
-            const enumMatch = /^Enum\.([A-Za-z0-9_]+)/.exec(raw);
+            const enumMatch = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(raw);
             if (enumMatch?.[1]) {
               const enumType = await findEnum(enumMatch[1]);
-              return enumType
-                ? `OK        ${entry} — Enum.${enumType.Name} exists (${enumType.Items?.length ?? 0} items).`
-                : `NOT FOUND ${entry} — no Enum named "${enumMatch[1]}".`;
+              if (!enumType) return `NOT FOUND ${entry} — no Enum named "${enumMatch[1]}".`;
+              const items = enumType.Items ?? [];
+              const itemName = enumMatch[2];
+              // The item used to be thrown away here, so "Enum.Material.TotallyFakeMaterial"
+              // came back "OK — Enum.Material exists" and was counted under "all APIs are
+              // current and usable". A fabricated EnumItem is the single most common way a
+              // model gets Roblox code wrong, and it is exactly what this tool is for.
+              if (itemName === undefined) {
+                return `OK        ${entry} — Enum.${enumType.Name} exists (${items.length} items).`;
+              }
+              const item = items.find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
+              if (item) {
+                return `OK        ${entry} — Enum.${enumType.Name}.${item.Name} = ${item.Value}.`;
+              }
+              const near = nearestNames(itemName, items.map((i) => i.Name));
+              return `NOT FOUND ${entry} — Enum.${enumType.Name} has no item "${itemName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` It has ${items.length} items — call get_engine_api with "${enumType.Name}" to list them.`}`;
             }
 
             const cls = await findClass(className);
@@ -227,7 +240,16 @@ export function registerDocsTools(server: McpServer): void {
             const security = securityOf(member);
             if (security) {
               state = state === "DEPRECATED" ? state : "RESTRICTED";
-              notes.push(`security: ${security} — normal game scripts cannot use this`);
+              // Say which half is locked. A property a script reads freely and only a plugin
+              // can set was reported "normal game scripts cannot use this", and a model told
+              // that walks away from an API that reads fine.
+              notes.push(
+                security.scope === "all"
+                  ? `security: ${security.level} — normal game scripts cannot use this`
+                  : security.scope === "write"
+                    ? `security: ${security.level} to write — a game script can read it but not set it`
+                    : `security: ${security.level} to read — a game script can set it but not read it`,
+              );
             }
             if (member.Tags?.includes("NotScriptable")) notes.push("not scriptable");
             if (member.Tags?.includes("Yields")) notes.push("yields, call from a coroutine or with care");
@@ -284,7 +306,12 @@ export function registerDocsTools(server: McpServer): void {
 
         const cls = await findClass(looked);
         if (!cls) {
-          const enumType = await findEnum(args.name);
+          // "Enum.RaycastFilterType" is how Luau spells it and how check_api_health prints
+          // it back, but only the bare name used to resolve: the prefixed form fell through
+          // to the `Enum` datatype page, which is about enums in general and never mentions
+          // the one that was asked about. "Enum.Material.Neon" names the same enum.
+          const enumName = /^Enum\.([A-Za-z0-9_]+)/.exec(entry.raw)?.[1] ?? args.name;
+          const enumType = await findEnum(enumName);
           if (enumType) {
             const items = (enumType.Items ?? []).map((i) => `${i.Name} = ${i.Value}`).join(", ");
             return ok(`Enum.${enumType.Name}\n${items || "(no items)"}`);
@@ -308,7 +335,14 @@ export function registerDocsTools(server: McpServer): void {
           );
         }
 
-        const chain = args.include_inherited ? await classChain(cls.Name) : [cls];
+        // A caller who named one member wants that member wherever it is declared: Touched is
+        // BasePart's, so "Part.Touched" answered "Part has no members matching those filters"
+        // — which reads as "that event does not exist" for one of the most-used events on the
+        // platform. Narrowing to a member implies the chain, exactly as check_api_health does.
+        // A bare `filter` substring keeps the documented behaviour, since it is not a claim
+        // that any one member exists.
+        const chain =
+          args.include_inherited || memberFilter !== undefined ? await classChain(cls.Name) : [cls];
         const wanted = args.member_types ? new Set(args.member_types) : undefined;
         const filter = (args.filter ?? memberFilter)?.toLowerCase();
 
@@ -335,7 +369,9 @@ export function registerDocsTools(server: McpServer): void {
             for (const m of list.sort((a, b) => a.Name.localeCompare(b.Name))) {
               const notes: string[] = [];
               const security = securityOf(m);
-              if (security) notes.push(`security: ${security}`);
+              if (security) {
+                notes.push(`security: ${security.level}${security.scope === "all" ? "" : ` (${security.scope} only)`}`);
+              }
               if (m.Tags?.includes("Deprecated")) notes.push("DEPRECATED");
               if (m.Tags?.includes("ReadOnly")) notes.push("read-only");
               if (m.Tags?.includes("Yields")) notes.push("yields");
@@ -349,6 +385,20 @@ export function registerDocsTools(server: McpServer): void {
         }
 
         if (sections.length === 0) {
+          // A caller who named one member asked a yes/no question, and "no members matching
+          // those filters" answers neither — it reads as a filter mistake for what is really
+          // a member that does not exist. Say which it is, and name the near misses, the way
+          // check_api_health already does. A member the chain does have, hidden by
+          // member_types, still falls through to the filter wording, which is then true.
+          if (memberFilter !== undefined && args.filter === undefined) {
+            const found = await resolveMember(cls.Name, memberFilter);
+            if (!found) {
+              const near = await suggestMembers(cls.Name, memberFilter);
+              return ok(
+                `${cls.Name} has no member "${memberFilter}", inherited ones included.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`,
+              );
+            }
+          }
           return ok(`${cls.Name} has no members matching those filters. Superclass: ${cls.Superclass ?? "none"}.`);
         }
 
