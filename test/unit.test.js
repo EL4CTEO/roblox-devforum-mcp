@@ -996,3 +996,37 @@ test("a screenshot keeps the caption its poster gave it", () => {
   const noAlt = htmlToMarkdown('<div class="lightbox-wrapper"><a class="lightbox" href="//x.png"><img src="//x.png"></a></div>');
   assert.equal(noAlt, "[image]");
 });
+
+test("code keeps its comparison operators and is decoded exactly once", () => {
+  // The whole-post tag strip and entity decode used to run over code a second time:
+  // `if a < b and c > d then` came out as `if a  d then`, and "&lt;" in a string as "<".
+  const md = htmlToMarkdown(
+    '<pre><code class="lang-lua">if a &lt; b and c &gt; d then\n  local t: {Array&lt;number&gt;} = {}\n  print("&amp;lt;")\nend</code></pre><p>Use <code>x &lt;= y</code> here &amp; there.</p>',
+  );
+  assert.match(md, /if a < b and c > d then/);
+  assert.match(md, /Array<number>/);
+  assert.match(md, /print\("&lt;"\)/);
+  assert.match(md, /Use `x <= y` here & there\./);
+});
+
+test("a multi-phrasing merge honours order latest, and relevance counts agreement once", async () => {
+  const { mergeResults, orderMerged } = await import("../dist/rank.js");
+  const at = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const merged = mergeResults([
+    { query: "a", topics: [{ id: 1, title: "new" }, { id: 2, title: "old" }], posts: [{ id: 10, topic_id: 1, post_number: 1, created_at: at(1) }, { id: 20, topic_id: 2, post_number: 1, created_at: at(90) }] },
+    { query: "b", topics: [{ id: 2, title: "old" }], posts: [{ id: 20, topic_id: 2, post_number: 1, created_at: at(90) }] },
+  ]);
+  assert.equal(merged.topics[0].id, 2, "agreement-first before re-ordering");
+  const latest = orderMerged(merged.topics, merged.posts, "latest", merged.positions);
+  assert.deepEqual(latest.map((t) => t.id), [1, 2], "a three-month-old thread outranked yesterday's");
+
+  // Topic 9 is the first hit of one phrasing and fully on topic; 8 was matched weakly by both.
+  const topics = [
+    { id: 8, title: "Elevator shaking visibly", bumped_at: at(30), posts_count: 5 },
+    { id: 9, title: "Tween not playing after delay", bumped_at: at(30), posts_count: 5 },
+  ];
+  const matchedBy = new Map([[8, ["tween not playing", "tweenservice completed not firing"]], [9, ["tween not playing"]]]);
+  const positions = new Map([[8, 4], [9, 0]]);
+  const ranked = rank(topics, [], false, matchedBy, ["tween not playing", "tweenservice completed not firing"], positions);
+  assert.equal(ranked[0].topic.id, 9);
+});

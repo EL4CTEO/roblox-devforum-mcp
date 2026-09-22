@@ -24,7 +24,12 @@ import {
   cleanDocProse,
   resolveDocPath,
   deprecationNote,
+  findLibrary,
+  globalMember,
+  libraryMember,
+  referenceMembers,
   type ApiMember,
+  type DocMember,
 } from "../docs.js";
 import { truncate } from "../format.js";
 import { ok, fail, toToolError } from "./util.js";
@@ -51,7 +56,7 @@ function filterDatatypeMembers(page: string, memberName: string): string {
   if (wanted.length === 0) return page;
   // The member leads. Vector3's own summary runs to 1.4 KB, so putting it first pushed the
   // member the caller asked about past the end of a normal token budget.
-  return [...wanted, "# --- the whole datatype ---", header].join("\n");
+  return [...wanted, "# --- the whole page ---", header].join("\n");
 }
 
 /**
@@ -88,6 +93,174 @@ const RELEASE_NOTES_HINT =
 
 export function isReleaseNotesQuery(text: string): boolean {
   return /release[\s-]?notes?|^\s*updates?\b|\/updates?\/|changelog/i.test(text);
+}
+
+/** Fixed-width states, so a batch of results lines up in a monospace reply. */
+const STATE = {
+  ok: "OK        ",
+  deprecated: "DEPRECATED",
+  restricted: "RESTRICTED",
+  missing: "NOT FOUND ",
+  wrongCase: "WRONG CASE",
+} as const;
+
+/**
+ * Luau is case-sensitive, so `Enum.Material.neon` and `humanoid:moveTo()` fail at runtime.
+ * They used to be matched case-insensitively and reported OK; the right spelling is found
+ * all the same, and handed back instead.
+ */
+function wrongCase(entry: string, spelled: string, extra = ""): string {
+  return `${STATE.wrongCase} ${entry} — Luau is case-sensitive: write ${spelled}.${extra}`;
+}
+
+/** A library function or bare global, from the docs page that documents it. */
+function docMemberLine(entry: string, found: DocMember, what: string): string {
+  const url = docUrl(found.path);
+  if (!found.exact) return wrongCase(entry, found.name, found.deprecated ? " It is also deprecated." : "");
+  if (found.deprecated) {
+    return `${STATE.deprecated} ${entry} — ${what}${found.note ? ` [${found.note}]` : ""} (${url})`;
+  }
+  return `${STATE.ok} ${entry} — ${what} (${url})`;
+}
+
+/** Luau's own constructors on Instance; every other class is created through these. */
+const INSTANCE_CONSTRUCTORS = new Set(["new", "fromExisting"]);
+
+/** Check one check_api_health entry and describe it on a single line. */
+async function checkEntry(entry: string): Promise<string> {
+  const { raw, className, memberName } = splitApiEntry(entry);
+
+  // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
+  const enumMatch = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(raw);
+  if (enumMatch?.[1]) {
+    const enumType = await findEnum(enumMatch[1]);
+    if (!enumType) return `${STATE.missing} ${entry} — no Enum named "${enumMatch[1]}".`;
+    if (enumType.Name !== enumMatch[1]) return wrongCase(entry, `Enum.${enumType.Name}${enumMatch[2] ? `.${enumMatch[2]}` : ""}`);
+    const items = enumType.Items ?? [];
+    const itemName = enumMatch[2];
+    // The item used to be thrown away here, so "Enum.Material.TotallyFakeMaterial"
+    // came back "OK — Enum.Material exists" and was counted under "all APIs are
+    // current and usable". A fabricated EnumItem is the single most common way a
+    // model gets Roblox code wrong, and it is exactly what this tool is for.
+    if (itemName === undefined) {
+      return `${STATE.ok} ${entry} — Enum.${enumType.Name} exists (${items.length} items).`;
+    }
+    const item = items.find((i) => i.Name === itemName);
+    if (item) return `${STATE.ok} ${entry} — Enum.${enumType.Name}.${item.Name} = ${item.Value}.`;
+    const cased = items.find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
+    if (cased) return wrongCase(entry, `Enum.${enumType.Name}.${cased.Name}`);
+    const near = nearestNames(itemName, items.map((i) => i.Name));
+    return `${STATE.missing} ${entry} — Enum.${enumType.Name} has no item "${itemName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` It has ${items.length} items — call get_engine_api with "${enumType.Name}" to list them.`}`;
+  }
+
+  const cls = await findClass(className);
+  if (!cls) {
+    const enumType = await findEnum(className);
+    if (enumType) return `${STATE.ok} ${entry} — Enum.${enumType.Name} exists.`;
+
+    const library = await findLibrary(className);
+    if (library) {
+      // A class name is often a variable in disguise ("humanoid:MoveTo"), so its case is not
+      // held against the caller. A library name is the global itself: `Task.wait` errors.
+      if (library !== className) {
+        const found = memberName === undefined ? undefined : await libraryMember(library, memberName);
+        return wrongCase(entry, found?.name ?? (memberName === undefined ? library : `${library}.${memberName}`));
+      }
+      if (memberName === undefined) return `${STATE.ok} ${entry} — the Luau ${library} library (${docUrl(resolveDocPath(`reference/engine/libraries/${library}.yaml`))})`;
+      const found = await libraryMember(library, memberName);
+      if (found) return docMemberLine(entry, found, `${found.name} is part of the ${library} library`);
+      const members = [...referenceMembers(await fetchDoc(resolveDocPath(`reference/engine/libraries/${library}.yaml`))).keys()];
+      const near = nearestNames(memberName, members.map((n) => n.slice(n.indexOf(".") + 1)));
+      return `${STATE.missing} ${entry} — the ${library} library has no "${memberName}".${near.length ? ` Closest: ${near.map((n) => `${library}.${n}`).join(", ")}.` : ""}`;
+    }
+
+    // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
+    const datatype = await findDatatype(className);
+    if (datatype) {
+      const url = `https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
+      // The member used to be thrown away here, so "Vector3.TotallyFakeMember" was
+      // answered "OK — Vector3 is a datatype" and counted under "all APIs are
+      // current and usable". The point of this tool is catching exactly that.
+      if (!memberName) return `${STATE.ok} ${entry} — ${datatype} is a datatype; see ${url}`;
+      const members = await datatypeMembers(datatype);
+      if (members.has(memberName)) {
+        return `${STATE.ok} ${entry} — ${datatype}.${memberName} exists (datatype, documented at ${url})`;
+      }
+      const cased = [...members].find((m) => m.toLowerCase() === memberName.toLowerCase());
+      if (cased) return wrongCase(entry, `${datatype}.${cased}`);
+      const near = nearestNames(memberName, members);
+      return `${STATE.missing} ${entry} — the ${datatype} datatype has no "${memberName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` See ${url}`}`;
+    }
+
+    // A bare name that is none of the above may be a global function: wait, spawn, typeof.
+    if (memberName === undefined) {
+      const global = await globalMember(className);
+      if (global) return docMemberLine(entry, global, `global ${global.name}`);
+    }
+
+    const near = await suggestClasses(className);
+    return `${STATE.missing} ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+  }
+
+  const notes: string[] = [];
+  let state: string = STATE.ok;
+
+  if (!memberName) {
+    if (cls.Tags?.includes("Deprecated")) {
+      state = STATE.deprecated;
+      const note = await deprecationNote(cls.Name);
+      if (note) notes.push(note);
+    }
+    if (cls.Tags?.includes("NotCreatable")) notes.push("not creatable with Instance.new");
+    if (cls.Tags?.includes("Service")) notes.push("get it via game:GetService");
+    return `${state} ${entry} — class ${cls.Name}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
+  }
+
+  const found = await resolveMember(cls.Name, memberName);
+  if (!found) {
+    // Instance.new is a Luau library function, not a class member, so the dump has no
+    // entry for it. It is the only such constructor: "Humanoid.new" and "Part.fromRGB" used
+    // to be waved through as constructors too, and neither exists.
+    if (cls.Name === "Instance" && INSTANCE_CONSTRUCTORS.has(memberName)) {
+      return `${STATE.ok} ${entry} — constructor, not a class member; it is not listed in the API dump.`;
+    }
+    if (memberName === "new" && !cls.Tags?.includes("NotCreatable")) {
+      return `${STATE.missing} ${entry} — classes have no .new; create one with Instance.new("${cls.Name}").`;
+    }
+    const near = await suggestMembers(cls.Name, memberName);
+    return `${STATE.missing} ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+  }
+
+  const { owner, member } = found;
+  if (!found.exact) {
+    const deprecated = member.Tags?.includes("Deprecated") ? " It is also deprecated." : "";
+    return wrongCase(entry, `${cls.Name}${member.MemberType === "Function" ? ":" : "."}${member.Name}`, deprecated);
+  }
+  if (member.Tags?.includes("Deprecated")) {
+    state = STATE.deprecated;
+    const note = await deprecationNote(owner.Name, member.Name);
+    if (note) notes.push(note);
+  }
+  const security = securityOf(member);
+  if (security) {
+    state = state === STATE.deprecated ? state : STATE.restricted;
+    // Say which half is locked. A property a script reads freely and only a plugin
+    // can set was reported "normal game scripts cannot use this", and a model told
+    // that walks away from an API that reads fine.
+    notes.push(
+      security.scope === "all"
+        ? `security: ${security.level} — normal game scripts cannot use this`
+        : security.scope === "write"
+          ? `security: ${security.level} to write — a game script can read it but not set it`
+          : `security: ${security.level} to read — a game script can set it but not read it`,
+    );
+  }
+  if (member.Tags?.includes("NotScriptable")) notes.push("not scriptable");
+  if (member.Tags?.includes("Yields")) notes.push("yields, call from a coroutine or with care");
+  if (member.Tags?.includes("ReadOnly")) notes.push("read-only");
+  if (owner.Name !== cls.Name) notes.push(`inherited from ${owner.Name}`);
+
+  return `${state} ${entry} — ${signature(member)}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
 }
 
 export function registerDocsTools(server: McpServer): void {
@@ -144,7 +317,7 @@ export function registerDocsTools(server: McpServer): void {
     {
       title: "Check Roblox APIs for deprecation",
       description:
-        "Batch-check Roblox APIs before you ship Luau that uses them. Pass entries like \"Humanoid.MoveTo\", \"BodyVelocity\" or \"DataStoreService.GetDataStore\" and each is verified against the live API dump: does it still exist, is it deprecated (with the official replacement where the docs give one), is it locked behind a security level normal scripts cannot use, and does it yield. Use this whenever you are about to write or review Roblox code — models often reproduce APIs that Roblox retired years ago.",
+        "Batch-check Roblox APIs before you ship Luau that uses them. Pass entries like \"Humanoid.MoveTo\", \"BodyVelocity\", \"Enum.Material.Neon\", \"task.wait\" or \"wait\" and each is verified against the live API dump and the official docs: does it still exist, is it spelled with the right case, is it deprecated (with the official replacement where the docs give one), is it locked behind a security level normal scripts cannot use, and does it yield. Use this whenever you are about to write or review Roblox code — models often reproduce APIs that Roblox retired years ago.",
       inputSchema: {
         members: z
           .array(z.string().min(2))
@@ -157,107 +330,15 @@ export function registerDocsTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        // One entry failing to load — a docs page that 404s, a timeout — used to fail the whole
+        // batch, throwing away the answers that had worked. It is reported on its own line.
         const lines = await Promise.all(
-          args.members.map(async (entry) => {
-            const { raw, className, memberName } = splitApiEntry(entry);
-
-            // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
-            const enumMatch = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(raw);
-            if (enumMatch?.[1]) {
-              const enumType = await findEnum(enumMatch[1]);
-              if (!enumType) return `NOT FOUND ${entry} — no Enum named "${enumMatch[1]}".`;
-              const items = enumType.Items ?? [];
-              const itemName = enumMatch[2];
-              // The item used to be thrown away here, so "Enum.Material.TotallyFakeMaterial"
-              // came back "OK — Enum.Material exists" and was counted under "all APIs are
-              // current and usable". A fabricated EnumItem is the single most common way a
-              // model gets Roblox code wrong, and it is exactly what this tool is for.
-              if (itemName === undefined) {
-                return `OK        ${entry} — Enum.${enumType.Name} exists (${items.length} items).`;
-              }
-              const item = items.find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
-              if (item) {
-                return `OK        ${entry} — Enum.${enumType.Name}.${item.Name} = ${item.Value}.`;
-              }
-              const near = nearestNames(itemName, items.map((i) => i.Name));
-              return `NOT FOUND ${entry} — Enum.${enumType.Name} has no item "${itemName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` It has ${items.length} items — call get_engine_api with "${enumType.Name}" to list them.`}`;
-            }
-
-            const cls = await findClass(className);
-            if (!cls) {
-              const enumType = await findEnum(className);
-              if (enumType) return `OK        ${entry} — Enum.${enumType.Name} exists.`;
-              // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
-              const datatype = await findDatatype(className);
-              if (datatype) {
-                const url = `https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
-                // The member used to be thrown away here, so "Vector3.TotallyFakeMember" was
-                // answered "OK — Vector3 is a datatype" and counted under "all APIs are
-                // current and usable". The point of this tool is catching exactly that.
-                if (!memberName) return `OK        ${entry} — ${datatype} is a datatype; see ${url}`;
-                const members = await datatypeMembers(datatype);
-                if (members.has(memberName)) {
-                  return `OK        ${entry} — ${datatype}.${memberName} exists (datatype, documented at ${url})`;
-                }
-                const near = nearestNames(memberName, members);
-                return `NOT FOUND ${entry} — the ${datatype} datatype has no "${memberName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` See ${url}`}`;
-              }
-              const near = await suggestClasses(className);
-              return `NOT FOUND ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
-            }
-
-            const notes: string[] = [];
-            let state = "OK       ";
-
-            if (!memberName) {
-              if (cls.Tags?.includes("Deprecated")) {
-                state = "DEPRECATED";
-                const note = await deprecationNote(cls.Name);
-                if (note) notes.push(note);
-              }
-              if (cls.Tags?.includes("NotCreatable")) notes.push("not creatable with Instance.new");
-              if (cls.Tags?.includes("Service")) notes.push("get it via game:GetService");
-              return `${state} ${entry} — class ${cls.Name}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
-            }
-
-            const found = await resolveMember(cls.Name, memberName);
-            if (!found) {
-              // Constructors like Instance.new or Color3.fromRGB are Luau library functions,
-              // not class members, so the dump has no entry for them.
-              if (/^(new|from[A-Z]\w*)$/.test(memberName)) {
-                return `OK        ${entry} — constructor, not a class member; it is not listed in the API dump.`;
-              }
-              const near = await suggestMembers(cls.Name, memberName);
-              return `NOT FOUND ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
-            }
-
-            const { owner, member } = found;
-            if (member.Tags?.includes("Deprecated")) {
-              state = "DEPRECATED";
-              const note = await deprecationNote(owner.Name, member.Name);
-              if (note) notes.push(note);
-            }
-            const security = securityOf(member);
-            if (security) {
-              state = state === "DEPRECATED" ? state : "RESTRICTED";
-              // Say which half is locked. A property a script reads freely and only a plugin
-              // can set was reported "normal game scripts cannot use this", and a model told
-              // that walks away from an API that reads fine.
-              notes.push(
-                security.scope === "all"
-                  ? `security: ${security.level} — normal game scripts cannot use this`
-                  : security.scope === "write"
-                    ? `security: ${security.level} to write — a game script can read it but not set it`
-                    : `security: ${security.level} to read — a game script can set it but not read it`,
-              );
-            }
-            if (member.Tags?.includes("NotScriptable")) notes.push("not scriptable");
-            if (member.Tags?.includes("Yields")) notes.push("yields, call from a coroutine or with care");
-            if (member.Tags?.includes("ReadOnly")) notes.push("read-only");
-            if (owner.Name !== cls.Name) notes.push(`inherited from ${owner.Name}`);
-
-            return `${state} ${entry} — ${signature(member)}${notes.length ? ` [${notes.join("; ")}]` : ""}`;
-          }),
+          args.members.map((entry) =>
+            checkEntry(entry).catch(
+              (err: unknown) =>
+                `UNKNOWN    ${entry} — could not be checked: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          ),
         );
 
         const flagged = lines.filter((l) => !l.startsWith("OK")).length;
@@ -282,7 +363,7 @@ export function registerDocsTools(server: McpServer): void {
           .string()
           .min(2)
           .describe(
-            "Class name (e.g. DataStoreService, Humanoid), Enum name (e.g. RaycastFilterType), or a single member as \"Humanoid.LoadAnimation\" / \"Humanoid:LoadAnimation\", which narrows the lookup to that member.",
+            "Class name (e.g. DataStoreService, Humanoid), Enum name (e.g. RaycastFilterType), datatype (Vector3), Luau library or global (task, wait), or a single member as \"Humanoid.LoadAnimation\" / \"task.wait\", which narrows the lookup to that member.",
           ),
         filter: z.string().optional().describe("Only members whose name contains this substring."),
         member_types: z
@@ -329,9 +410,24 @@ export function registerDocsTools(server: McpServer): void {
               `${datatype} is a datatype, not a class — from the documentation, not the API dump.\n${docUrl(path)}\n\n${truncate(body, args.max_tokens, "read the page online")}`,
             );
           }
+          // task, math, string… and the bare globals are documented but not in the dump, so
+          // "task.wait" answered "no engine class named task.wait" — the same false negative
+          // check_api_health gave, from the tool a model asks next.
+          const library = await findLibrary(entry.className);
+          const globalPath = library || memberFilter !== undefined ? undefined : (await globalMember(entry.className))?.path;
+          const docPath = library ? resolveDocPath(`reference/engine/libraries/${library}.yaml`) : globalPath;
+          if (docPath) {
+            const page = cleanDocProse(cleanReferenceYaml(await fetchDoc(docPath)), docPath);
+            const narrow = library ? memberFilter : entry.className;
+            const body = narrow === undefined ? page : filterDatatypeMembers(page, narrow);
+            const what = library ? `${library} is a Luau library` : `${entry.className} is a global function`;
+            return ok(
+              `${what}, not a class — from the documentation, not the API dump.\n${docUrl(docPath)}\n\n${truncate(body, args.max_tokens, "read the page online")}`,
+            );
+          }
           const suggestions = await suggestClasses(args.name);
           return fail(
-            `No engine class, enum or datatype named "${args.name}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
+            `No engine class, enum, datatype, library or global named "${args.name}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
           );
         }
 

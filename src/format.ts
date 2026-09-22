@@ -45,16 +45,24 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
   );
   s = s.replace(/<div\b[^>]*class="[^"]*(lightbox-wrapper|meta|onebox-body)[^"]*"[\s\S]*?<\/div>/gi, "");
 
+  // Code is decoded once and then parked outside the string until the very end. It used to
+  // be decoded in place, so the tag strip and entity decode that run over the whole post
+  // afterwards ran over the code a second time: `if a < b and c > d then` came out as
+  // `if a  d then`, `Array<number>` as `Array`, and a literal "&lt;" in a string as "<".
+  // Luau compares with < and > on nearly every line, so this corrupted most answers.
+  const code: string[] = [];
+  const park = (text: string): string => `\u0000${code.push(text) - 1}\u0000`;
+
   // Fenced code: <pre><code class="lang-lua">…</code></pre>
   s = s.replace(
     /<pre\b[^>]*>\s*<code\b([^>]*)>([\s\S]*?)<\/code>\s*<\/pre>/gi,
     (_m, attrs: string, body: string) => {
       const lang = /lang-([\w+-]+)/i.exec(attrs)?.[1] ?? "lua";
-      return `\n\n\`\`\`${lang}\n${decodeEntities(stripTags(body)).replace(/\s+$/, "")}\n\`\`\`\n\n`;
+      return `\n\n${park(`\`\`\`${lang}\n${decodeEntities(stripTags(body)).replace(/\s+$/, "")}\n\`\`\``)}\n\n`;
     },
   );
-  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_m, body: string) => `\n\n\`\`\`\n${decodeEntities(stripTags(body)).trim()}\n\`\`\`\n\n`);
-  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_m, body: string) => `\`${decodeEntities(stripTags(body)).trim()}\``);
+  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_m, body: string) => `\n\n${park(`\`\`\`\n${decodeEntities(stripTags(body)).trim()}\n\`\`\``)}\n\n`);
+  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_m, body: string) => park(`\`${decodeEntities(stripTags(body)).trim()}\``));
 
   // Structure
   s = s.replace(/<br\s*\/?>/gi, "\n");
@@ -93,6 +101,7 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
       .replace(/^(#{1,6}|[-*])[ \t]*\n+[ \t]*(?=\S)/gm, "$1 ")
       .replace(/\n{3,}/g, "\n\n")
       .trim()
+      .replace(/\u0000(\d+)\u0000/g, (_m, i: string) => code[Number(i)] ?? "")
   );
 }
 

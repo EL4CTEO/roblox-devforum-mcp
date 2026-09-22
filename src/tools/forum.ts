@@ -8,6 +8,7 @@ import {
   DEFAULT_SLUGS,
   categoryName,
   ensureCategories,
+  getPostByNumber,
   getPostsByIds,
   getTopic,
   listCategories,
@@ -23,7 +24,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
-import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, rank, replyCount } from "../rank.js";
+import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, orderMerged, rank, replyCount } from "../rank.js";
 import { ok, fail, toToolError, parseTopicId } from "./util.js";
 
 /**
@@ -173,15 +174,32 @@ const querySchema = z
     "Search text, or an array of up to 5 phrasings run in parallel and merged. Multiple phrasings are the fast way to cover a problem: [\"DataStore 502\", \"API Services rejected request\", \"datastore timeout\"]. Topics found by more than one phrasing rank highest.",
   );
 
-/** Run every phrasing at once and merge, so one tool call covers a whole line of enquiry. */
+/**
+ * Run every phrasing at once and merge, so one tool call covers a whole line of enquiry.
+ *
+ * One phrasing the index cannot answer in time used to fail the whole call, discarding the
+ * four that had answered: the more ways a caller described the problem, the likelier it got
+ * nothing. A phrasing that fails is named in `failed` instead; only all of them failing is
+ * an error.
+ */
 async function runQueries(
   queries: string[],
   base: Omit<SearchOptions, "query">,
-): Promise<{ topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]> }> {
-  const sets = await Promise.all(
+): Promise<{ topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]>; positions: Map<number, number>; failed: string[] }> {
+  const settled = await Promise.allSettled(
     queries.map(async (query) => ({ query, ...(await search({ ...base, query })) })),
   );
-  return mergeResults(sets);
+  const sets = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+  const firstError = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (sets.length === 0 && firstError) throw firstError.reason;
+  const failed = queries.filter((_, i) => settled[i]?.status === "rejected");
+  return { ...mergeResults(sets), failed };
+}
+
+/** Names the phrasings that failed and were left out, or nothing when every one answered. */
+function skippedNote(failed: string[]): string {
+  if (failed.length === 0) return "";
+  return ` (${failed.map((q) => `"${q}"`).join(", ")} could not be searched and ${failed.length === 1 ? "was" : "were"} skipped)`;
 }
 
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
@@ -264,7 +282,7 @@ export function registerForumTools(server: McpServer): void {
         const category = await resolveSlug(args.category);
         if (category.error) return fail(category.error);
         const queries = asList(args.query);
-        const { topics: found, posts, matchedBy } = await runQueries(queries, {
+        const { topics: merged, posts, matchedBy, positions, failed } = await runQueries(queries, {
           category: category.slug,
           tags: args.tags,
           solvedOnly: args.solved_only,
@@ -272,6 +290,8 @@ export function registerForumTools(server: McpServer): void {
           after: args.after,
           order: args.order,
         });
+        const found =
+          args.order === "relevance" || queries.length === 1 ? merged : orderMerged(merged, posts, args.order, positions);
         const byOrder =
           args.order === "relevance" ? found : onTopicOnly(found, posts, queries);
         const topics = applyMinLikes(byOrder, posts, args.min_likes);
@@ -283,14 +303,14 @@ export function registerForumTools(server: McpServer): void {
             : active.length > 0
               ? ` Active filters: ${active.join(", ")} — try dropping one, or use the raw error text.`
               : " Try fewer words or the raw error text.";
-          return ok(`No DevForum threads matched ${label}.${floor}`);
+          return ok(`No DevForum threads matched ${label}${skippedNote(failed)}.${floor}`);
         }
-        const ranked = rank(topics, posts, args.order !== "relevance", matchedBy, queries).slice(0, args.limit);
+        const ranked = rank(topics, posts, args.order !== "relevance", matchedBy, queries, positions).slice(0, args.limit);
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, queries.length > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
         const sortedBy = args.order === "relevance" ? "" : `, ordered by ${args.order} rather than relevance`;
-        const head = `${ranked.length} DevForum threads for ${label}${queries.length > 1 ? ` (${queries.length} phrasings merged)` : ""}${sortedBy}:`;
+        const head = `${ranked.length} DevForum threads for ${label}${queries.length > 1 ? ` (${queries.length} phrasings merged)` : ""}${sortedBy}${skippedNote(failed)}:`;
         return ok(truncate(`${head}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_devforum failed", err);
@@ -328,7 +348,7 @@ export function registerForumTools(server: McpServer): void {
         }
         const queries = asList(args.query);
         const base = { category: area.slug ?? BUG_PARENT, after: args.after };
-        let { topics, posts, matchedBy } = await runQueries(queries, base);
+        let { topics, posts, matchedBy, positions, failed } = await runQueries(queries, base);
         const label = queries.map((q) => `"${q}"`).join(" / ");
 
         // A sentence-shaped symptom can match nothing while its keywords match a triaged
@@ -338,17 +358,19 @@ export function registerForumTools(server: McpServer): void {
         // makes the results worse than asking with one.
         const matched = new Set([...matchedBy.values()].flat());
         const pairs = queries
-          .filter((q) => !matched.has(q))
+          .filter((q) => !matched.has(q) && !failed.includes(q))
           .map((q) => [q, broaden(q)] as const)
           .filter((pair): pair is readonly [string, string] => Boolean(pair[1]));
         const alts = [...new Set(pairs.map(([, trimmed]) => trimmed))];
         let broadened: string[] | undefined;
         if (alts.length > 0) {
           // The original phrasings are re-run from cache, so the merge keeps agreement counts.
-          const retry = await runQueries([...queries, ...alts], base);
-          if (retry.topics.length > topics.length) {
-            ({ topics, posts, matchedBy } = retry);
-            broadened = alts;
+          // Best effort: the first round already answered, and a retry that times out must
+          // not turn that answer into a failure.
+          const retry = await runQueries([...queries, ...alts], base).catch(() => undefined);
+          if (retry && retry.topics.length > topics.length) {
+            ({ topics, posts, matchedBy, positions } = retry);
+            broadened = alts.filter((alt) => !retry.failed.includes(alt));
           }
         }
 
@@ -373,10 +395,10 @@ export function registerForumTools(server: McpServer): void {
             }
           }
           return ok(
-            `No bug reports matched ${label}${tried}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
+            `No bug reports matched ${label}${tried}${skippedNote(failed)}. That often means it is not a known engine bug — try search_devforum for scripting-support threads, or search_creator_docs for expected behaviour.`,
           );
         }
-        const ranked = rank(topics, posts, false, matchedBy, [...queries, ...(broadened ?? [])]).slice(0, args.limit);
+        const ranked = rank(topics, posts, false, matchedBy, [...queries, ...(broadened ?? [])], positions).slice(0, args.limit);
         const phrasings = broadened ? queries.length + broadened.length : queries.length;
         const body = ranked
           .map((r, i) => topicLine(i + 1, r.topic, r.post, phrasings > 1 ? matchedBy.get(r.topic.id) : undefined))
@@ -391,7 +413,7 @@ export function registerForumTools(server: McpServer): void {
         const legend = anyTag
           ? "Brackets hold the topic's own status tag, or [answered] where a reply was marked as the solution."
           : "[answered] means a reply was marked as the solution — by whoever opened the thread, not by Roblox. Read the thread for a staff response before treating a report as confirmed.";
-        const header = `${ranked.length} bug reports for ${label}. ${legend}${widened}`;
+        const header = `${ranked.length} bug reports for ${label}${skippedNote(failed)}. ${legend}${widened}`;
         return ok(truncate(`${header}\n\n${body}`, args.max_tokens, "narrow the query"));
       } catch (err) {
         return toToolError("search_bugs failed", err);
@@ -429,7 +451,17 @@ export function registerForumTools(server: McpServer): void {
         if (all.length === 0) return fail(`Topic ${topicId} has no readable posts (it may be private).`);
 
         const first = all[0];
-        const accepted = all.find((p) => p.accepted_answer && p.post_number !== first?.post_number);
+        // The topic payload carries only the first 20 posts, and the answer the asker accepted
+        // is often further down: in "_G vs shared" it is post #40 of 43, so the tool that
+        // promises to hoist the accepted answer showed three other replies and never
+        // mentioned there was one. The solved plugin names its post number on the topic, so
+        // it is fetched directly when the chunk does not hold it.
+        const acceptedNumber = topic.accepted_answer?.post_number;
+        const accepted =
+          all.find((p) => p.accepted_answer && p.post_number !== first?.post_number) ??
+          (acceptedNumber !== undefined && acceptedNumber > 1
+            ? await getPostByNumber(topicId, acceptedNumber).catch(() => undefined)
+            : undefined);
         const rest = all
           .filter((p) => p !== first && p !== accepted && !isAutomated(p))
           .sort((a, b) => {
@@ -443,7 +475,10 @@ export function registerForumTools(server: McpServer): void {
         // The topic endpoint omits has_accepted_answer even where search reports it, so a
         // thread search had just badged [answered] opened with no mention of one. The posts
         // it returns carry the flag themselves.
-        const status = bugStatus({ ...topic, has_accepted_answer: topic.has_accepted_answer ?? all.some((p) => p.accepted_answer) });
+        const status = bugStatus({
+          ...topic,
+          has_accepted_answer: topic.has_accepted_answer ?? (Boolean(topic.accepted_answer) || all.some((p) => p.accepted_answer)),
+        });
         const head = [
           `# ${topic.title}`,
           [

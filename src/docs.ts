@@ -12,12 +12,37 @@ const API_DUMP_URL =
 
 /* ------------------------------ docs file tree ----------------------------- */
 
-let treePromise: Promise<string[]> | undefined;
+/**
+ * A load shared by every caller for `ttlMs`, and forgotten the moment it fails.
+ *
+ * The docs tree used to be a bare `??=` promise, so one failed first fetch — GitHub
+ * rate-limiting a fresh IP, a dropped connection — was remembered for the life of the
+ * process: every later search_creator_docs call, and every datatype check, replayed the
+ * same rejection until the server was restarted. It also never expired, so a session left
+ * open for days kept the tree and the API dump from the day it started.
+ */
+function memo<T>(ttlMs: number, load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  let at = 0;
+  return () => {
+    if (promise === undefined || Date.now() - at > ttlMs) {
+      at = Date.now();
+      const p = load();
+      promise = p;
+      p.catch(() => {
+        if (promise === p) promise = undefined;
+      });
+    }
+    return promise;
+  };
+}
 
-async function docPaths(): Promise<string[]> {
-  // The raw tree is ~3.3 MB; only the filtered path list is kept, and it is cached to disk
-  // so a new session does not pay that download again on its first docs search.
-  treePromise ??= cachedJson("docs-tree", 24 * 3_600_000, async () => {
+const TREE_TTL = 24 * 3_600_000;
+
+// The raw tree is ~3.3 MB; only the filtered path list is kept, and it is cached to disk
+// so a new session does not pay that download again on its first docs search.
+const docPaths = memo(TREE_TTL, () =>
+  cachedJson("docs-tree", TREE_TTL, async () => {
     const data = await getGithubJson<{ tree?: Array<{ path: string; type: string }> }>(
       `https://api.github.com/repos/${DOCS_REPO}/git/trees/${DOCS_BRANCH}?recursive=1`,
       TTL.static,
@@ -25,9 +50,8 @@ async function docPaths(): Promise<string[]> {
     return (data.tree ?? [])
       .filter((n) => n.type === "blob" && n.path.startsWith(DOCS_ROOT) && /\.(md|yaml)$/.test(n.path))
       .map((n) => n.path);
-  });
-  return treePromise;
-}
+  }),
+);
 
 export interface DocHit {
   path: string;
@@ -390,21 +414,17 @@ export interface ApiClass {
   Members?: ApiMember[];
 }
 
+export interface ApiEnum {
+  Name: string;
+  Items?: Array<{ Name: string; Value: number }>;
+}
+
 interface ApiDump {
   Classes?: ApiClass[];
-  Enums?: Array<{ Name: string; Items?: Array<{ Name: string; Value: number }> }>;
+  Enums?: ApiEnum[];
 }
 
-let dumpPromise: Promise<ApiDump> | undefined;
-
-async function apiDump(): Promise<ApiDump> {
-  dumpPromise ??= cachedJson(
-    "api-dump",
-    12 * 3_600_000,
-    async () => JSON.parse(await getText(API_DUMP_URL, 0)) as ApiDump,
-  );
-  return dumpPromise;
-}
+const DUMP_TTL = 12 * 3_600_000;
 
 /**
  * Lower-cased name -> entry, built once per dump.
@@ -416,36 +436,30 @@ async function apiDump(): Promise<ApiDump> {
 interface DumpIndex {
   classesByLower: Map<string, ApiClass>;
   classesByName: Map<string, ApiClass>;
-  enumsByLower: Map<string, { Name: string; Items?: Array<{ Name: string; Value: number }> }>;
+  enumsByLower: Map<string, ApiEnum>;
   classNames: string[];
 }
 
-let indexPromise: Promise<DumpIndex> | undefined;
-
-async function dumpIndex(): Promise<DumpIndex> {
-  indexPromise ??= (async () => {
-    const dump = await apiDump();
-    const classes = dump.Classes ?? [];
-    return {
-      classesByLower: new Map(classes.map((c) => [c.Name.toLowerCase(), c])),
-      classesByName: new Map(classes.map((c) => [c.Name, c])),
-      enumsByLower: new Map((dump.Enums ?? []).map((e) => [e.Name.toLowerCase(), e])),
-      classNames: classes.map((c) => c.Name),
-    };
-  })().catch((err: unknown) => {
-    // A failed fetch must not be remembered as "the dump has no classes".
-    indexPromise = undefined;
-    dumpPromise = undefined;
-    throw err;
-  });
-  return indexPromise;
-}
+const dumpIndex = memo(DUMP_TTL, async (): Promise<DumpIndex> => {
+  const dump = await cachedJson(
+    "api-dump",
+    DUMP_TTL,
+    async () => JSON.parse(await getText(API_DUMP_URL, 0)) as ApiDump,
+  );
+  const classes = dump.Classes ?? [];
+  return {
+    classesByLower: new Map(classes.map((c) => [c.Name.toLowerCase(), c])),
+    classesByName: new Map(classes.map((c) => [c.Name, c])),
+    enumsByLower: new Map((dump.Enums ?? []).map((e) => [e.Name.toLowerCase(), e])),
+    classNames: classes.map((c) => c.Name),
+  };
+});
 
 export async function findClass(name: string): Promise<ApiClass | undefined> {
   return (await dumpIndex()).classesByLower.get(name.toLowerCase());
 }
 
-export async function findEnum(name: string) {
+export async function findEnum(name: string): Promise<ApiEnum | undefined> {
   return (await dumpIndex()).enumsByLower.get(name.toLowerCase());
 }
 
@@ -515,20 +529,128 @@ export async function findDatatype(name: string): Promise<string | undefined> {
   return match ? titleOf(match) : undefined;
 }
 
+/**
+ * Luau's built-in libraries — task, math, string, table, coroutine, buffer… — and the bare
+ * globals (wait, print, pcall, typeof). None of them are classes, so the API dump has no
+ * entry and check_api_health answered "NOT FOUND task.wait — no class "task" in the current
+ * API": telling a model that the replacement it should be using does not exist, while
+ * reporting nothing at all about `wait`, which Roblox deprecated in its favour. The docs
+ * carry every one, deprecations included.
+ */
+export async function findLibrary(name: string): Promise<string | undefined> {
+  const target = `${DOCS_ROOT}reference/engine/libraries/${name.toLowerCase()}.yaml`;
+  const match = (await docPaths()).find((p) => p.toLowerCase() === target);
+  return match ? titleOf(match) : undefined;
+}
+
+/** A function or constant documented on a library or globals page. */
+export interface DocMember {
+  /** As the docs spell it, e.g. "task.wait" or "wait". */
+  name: string;
+  /** False when only a different capitalisation matched. */
+  exact: boolean;
+  deprecated: boolean;
+  note?: string;
+  /** The page it lives on, as a repo path. */
+  path: string;
+}
+
+/** Member entries of a reference page, keyed by the name the docs give them. */
+export function referenceMembers(yaml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const block of splitMemberBlocks(yaml).slice(1)) {
+    const name = /^\s*-\s+name:\s+(\S+)\s*$/m.exec(block)?.[1];
+    if (name && !out.has(name)) out.set(name, block);
+  }
+  return out;
+}
+
+/** Whether a member block lists `Deprecated` under its own `tags:`. */
+export function blockIsDeprecated(block: string): boolean {
+  const lines = block.split("\n");
+  const at = lines.findIndex((l) => /^\s*tags:\s*$/.test(l));
+  if (at < 0) return false;
+  for (const line of lines.slice(at + 1)) {
+    const tag = /^\s*-\s+(\S+)\s*$/.exec(line);
+    if (!tag) break;
+    if (tag[1] === "Deprecated") return true;
+  }
+  return false;
+}
+
+async function lookupOnPages(paths: string[], name: string): Promise<DocMember | undefined> {
+  const pages = await Promise.all(paths.map(async (path) => ({ path, members: referenceMembers(await fetchDoc(path)) })));
+  const describe = (path: string, docName: string, block: string, exact: boolean): DocMember => {
+    const raw = blockDeprecationMessage(block);
+    return {
+      name: docName,
+      exact,
+      deprecated: blockIsDeprecated(block),
+      path,
+      ...(raw === undefined ? {} : { note: cleanDocProse(raw, path) }),
+    };
+  };
+  for (const { path, members } of pages) {
+    const block = members.get(name);
+    if (block !== undefined) return describe(path, name, block, true);
+  }
+  const lower = name.toLowerCase();
+  for (const { path, members } of pages) {
+    for (const [docName, block] of members) {
+      if (docName.toLowerCase() === lower) return describe(path, docName, block, false);
+    }
+  }
+  return undefined;
+}
+
+/** `task.wait`, `math.clamp`: a function or constant on one of Luau's libraries. */
+export async function libraryMember(library: string, member: string): Promise<DocMember | undefined> {
+  return lookupOnPages([resolveDocPath(`reference/engine/libraries/${library}.yaml`)], `${library}.${member}`);
+}
+
+/** The pages that document Luau's and Roblox's bare globals. */
+export const GLOBAL_PAGES = ["reference/engine/globals/LuaGlobals.yaml", "reference/engine/globals/RobloxGlobals.yaml"];
+
+/** `wait`, `print`, `typeof`: a bare global function or value. */
+export async function globalMember(name: string): Promise<DocMember | undefined> {
+  return lookupOnPages(GLOBAL_PAGES.map((p) => resolveDocPath(p)), name);
+}
+
 export interface MemberLookup {
   /** The class the member was actually found on — may be a superclass. */
   owner: ApiClass;
   member: ApiMember;
+  /** False when only a different capitalisation matched. */
+  exact: boolean;
 }
 
-/** Resolve `Class.Member` through the inheritance chain, case-insensitively. */
+/**
+ * Resolve `Class.Member` through the inheritance chain, exact spelling first.
+ *
+ * Luau is case-sensitive, and the dump holds 84 members that differ from another only in
+ * case — almost all of them the deprecated camelCase twins: findFirstChild beside
+ * FindFirstChild, isA beside IsA. Matching case-insensitively returned whichever came first,
+ * so "Instance.findFirstChild" was answered with FindFirstChild's entry and reported current,
+ * and "Humanoid.moveTo", which errors at runtime, was reported usable. A different
+ * capitalisation is still found, so the caller can be told the right one, but it is flagged.
+ */
 export async function resolveMember(className: string, memberName: string): Promise<MemberLookup | undefined> {
-  const target = memberName.toLowerCase();
-  for (const owner of await classChain(className)) {
-    const member = (owner.Members ?? []).find((m) => m.Name.toLowerCase() === target);
-    if (member) return { owner, member };
+  const chain = await classChain(className);
+  for (const owner of chain) {
+    const member = (owner.Members ?? []).find((m) => m.Name === memberName);
+    if (member) return { owner, member, exact: true };
   }
-  return undefined;
+  const target = memberName.toLowerCase();
+  let fallback: MemberLookup | undefined;
+  for (const owner of chain) {
+    for (const member of owner.Members ?? []) {
+      if (member.Name.toLowerCase() !== target) continue;
+      // Of the twins, point at the one that is current.
+      if (!member.Tags?.includes("Deprecated")) return { owner, member, exact: false };
+      fallback ??= { owner, member, exact: false };
+    }
+  }
+  return fallback;
 }
 
 /** Member names on a class (and its superclasses) that look like the given name. */
@@ -593,8 +715,11 @@ export function parseDeprecationMessage(yaml: string, memberName?: string): stri
   const block = memberName
     ? blocks.find((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*[.:]${escapeRe(memberName)}\\s*$`, "m").test(b))
     : blocks[0];
-  if (!block) return undefined;
+  return block === undefined ? undefined : blockDeprecationMessage(block);
+}
 
+/** The `deprecation_message` of one member block (or of the page header block). */
+export function blockDeprecationMessage(block: string): string | undefined {
   const lines = block.split("\n");
   const at = lines.findIndex((l) => /^\s*deprecation_message:/.test(l));
   if (at < 0) return undefined;
@@ -664,7 +789,9 @@ export function signature(member: ApiMember): string {
     const params = (member.Parameters ?? [])
       .map((p) => `${p.Name}: ${p.Type?.Name ?? "any"}${p.Default !== undefined ? ` = ${p.Default}` : ""}`)
       .join(", ");
-    return `${member.Name}(${params}) -> ${member.ReturnType?.Name ?? "void"}`;
+    // The dump names "returns nothing" `null`, which reads as "returns nil". Luau writes it ().
+    const returns = member.ReturnType?.Name;
+    return `${member.Name}(${params}) -> ${returns === undefined || returns === "null" ? "()" : returns}`;
   }
   if (member.MemberType === "Event") {
     const params = (member.Parameters ?? []).map((p) => `${p.Name}: ${p.Type?.Name ?? "any"}`).join(", ");

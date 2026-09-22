@@ -110,7 +110,7 @@ function ageYears(iso: string | undefined): number {
  */
 export function mergeResults(
   sets: Array<{ query: string; topics: RawTopic[]; posts: RawPost[] }>,
-): { topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]> } {
+): { topics: RawTopic[]; posts: RawPost[]; matchedBy: Map<number, string[]>; positions: Map<number, number> } {
   const best = new Map<number, { topic: RawTopic; position: number }>();
   const matchedBy = new Map<number, string[]>();
   const posts: RawPost[] = [];
@@ -138,7 +138,44 @@ export function mergeResults(
     })
     .map((entry) => entry.topic);
 
-  return { topics, posts, matchedBy };
+  const positions = new Map([...best].map(([id, entry]) => [id, entry.position]));
+  return { topics, posts, matchedBy, positions };
+}
+
+/**
+ * Put a multi-phrasing merge back into the order the caller asked for.
+ *
+ * mergeResults puts topics several phrasings found first, which is right for relevance and
+ * wrong for everything else: order "latest" with two phrasings listed a three-month-old
+ * thread above last week's because both phrasings happened to match it. Each set arrives
+ * sorted by the key already; the merge has to keep that promise. Search payloads carry no
+ * view counts, so "views" keeps each topic's best position within its own set instead.
+ */
+export function orderMerged(
+  topics: RawTopic[],
+  posts: RawPost[],
+  order: "latest" | "likes" | "views",
+  positions: Map<number, number>,
+): RawTopic[] {
+  const matched = new Map<number, RawPost>();
+  for (const post of posts) {
+    if (post.topic_id === undefined) continue;
+    const seen = matched.get(post.topic_id);
+    const better =
+      order === "likes"
+        ? (post.like_count ?? 0) > (seen?.like_count ?? 0)
+        : Date.parse(post.created_at ?? "") > Date.parse(seen?.created_at ?? "");
+    if (!seen || better) matched.set(post.topic_id, post);
+  }
+  const key = (topic: RawTopic): number => {
+    if (order === "latest") {
+      const t = Date.parse(matched.get(topic.id)?.created_at ?? topic.bumped_at ?? topic.created_at ?? "");
+      return Number.isNaN(t) ? 0 : t;
+    }
+    if (order === "likes") return likesOf(topic, matched.get(topic.id));
+    return -(positions.get(topic.id) ?? 0);
+  };
+  return [...topics].sort((a, b) => key(b) - key(a));
 }
 
 /**
@@ -151,8 +188,14 @@ export function rank(
   originalOrder = false,
   matchedBy?: Map<number, string[]>,
   queries: string[] = [],
+  positions?: Map<number, number>,
 ): Ranked[] {
   const terms = distinctiveTerms(queries);
+  // Each phrasing is its own description of the problem, so a title is judged against the
+  // one it matches best. Pooling every phrasing's words into one list meant a title that
+  // carried all of "tween not playing" still scored a third, diluted by the words of
+  // "TweenService Completed not firing" — and lost to threads carrying neither.
+  const perQuery = queries.map((q) => distinctiveTerms([q])).filter((t) => t.length > 0);
   const byTopic = new Map<number, RawPost>();
   for (const post of posts) {
     const key = post.topic_id;
@@ -167,13 +210,18 @@ export function rank(
 
     // Discourse relevance and the staleness of the thread are the frame; everything else
     // is thread quality, which only earns its weight once the thread looks on topic.
-    let score = 100 - index * 3;
+    // A merged list is ordered agreement-first, so its index already rewards agreement;
+    // counting it here and again below scored the same signal twice. The position a topic
+    // held in the result set that found it is the Discourse relevance this line is about.
+    let score = 100 - (positions?.get(topic.id) ?? index) * 3;
 
     // Whether the title is about the thing asked about used to be missing entirely, and a
     // search for "ProximityPrompt not triggering" answered with four solved, recent,
     // well-liked threads about audio, dialogue and DataStores — while the ProximityPrompt
     // thread Discourse ranked second lost to them on age and likes and never appeared.
-    const onTopic = titleMatch(topic.title, terms);
+    const onTopic = perQuery.length > 1
+      ? Math.max(...perQuery.map((t) => titleMatch(topic.title, t)))
+      : titleMatch(topic.title, terms);
     score += onTopic * 70;
 
     const bumpedAge = ageYears(topic.bumped_at ?? topic.last_posted_at ?? topic.created_at);

@@ -46,8 +46,8 @@ Any other MCP client:
 | `list_recent` | Latest or top topics in a category or tag. |
 | `list_categories` | Every category and tag slug the filters accept. |
 | `search_creator_docs` | Search the docs by page content; pass `path` to read a page in full. |
-| `get_engine_api` | Signatures, security levels and deprecations from the live API dump. |
-| `check_api_health` | Check APIs before you ship: removed, deprecated, security-gated, yielding. |
+| `get_engine_api` | Signatures, security levels and deprecations for classes, enums, datatypes and Luau libraries. |
+| `check_api_health` | Check APIs before you ship: removed, deprecated, wrong case, security-gated, yielding. |
 | `get_whats_new` | Recent platform changes — for "this worked last week". |
 | `get_weekly_recap` | Any Roblox Weekly Recap, current or historical. |
 

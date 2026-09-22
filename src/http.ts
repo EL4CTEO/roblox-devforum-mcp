@@ -170,19 +170,33 @@ function retryable(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-async function fetchOnce(
+/**
+ * One attempt, body included.
+ *
+ * The timer used to be cleared as soon as the headers arrived, so reading the body had no
+ * deadline at all: a CDN that sent headers and then stalled mid-way through the 2.4 MB API
+ * dump left the tool call hanging for as long as the socket stayed open. The body is read
+ * inside the same budget now, and a stall there is a timeout like any other.
+ */
+async function fetchOnce<T>(
   url: string,
   headers: Record<string, string>,
+  read: (res: Response) => Promise<T>,
   budgetMs = TIMEOUT_MS,
-): Promise<Response> {
+): Promise<{ ok: true; value: T } | { ok: false; res: Response }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(TIMEOUT_MS, budgetMs));
   try {
-    return await fetch(url, {
+    const res = await fetch(url, {
       headers: { "user-agent": UA, accept: "application/json, text/plain, */*", ...headers },
       signal: controller.signal,
       redirect: "follow",
     });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined); // free the socket; the body is not wanted
+      return { ok: false, res };
+    }
+    return { ok: true, value: await read(res) };
   } finally {
     clearTimeout(timer);
   }
@@ -195,7 +209,11 @@ async function fetchOnce(
  */
 const DEADLINE_MS = envInt("DEVFORUM_DEADLINE_MS", TIMEOUT_MS * 2, 100);
 
-async function request(url: string, headers: Record<string, string>): Promise<Response> {
+async function request<T>(
+  url: string,
+  headers: Record<string, string>,
+  read: (res: Response) => Promise<T>,
+): Promise<T> {
   const host = safeHost(url);
   const started = Date.now();
   await acquire(host);
@@ -205,11 +223,16 @@ async function request(url: string, headers: Record<string, string>): Promise<Re
       const elapsed = Date.now() - started;
       if (attempt > 0 && elapsed >= DEADLINE_MS) break;
       try {
-        const res = await fetchOnce(url, headers, Math.max(DEADLINE_MS - elapsed, 500));
-        if (res.ok) return res;
+        const out = await fetchOnce(url, headers, read, Math.max(DEADLINE_MS - elapsed, 500));
+        if (out.ok) return out.value;
+        const { res } = out;
         if (!retryable(res.status) || attempt === MAX_RETRIES) {
           throw new HttpError(res.status, url);
         }
+        // Remembered, so running out of deadline while backing off reports what the forum
+        // actually said. It used to fall through to a TimeoutError, and a 429 read "the
+        // request timed out — drop a filter", which sends the caller after the wrong fix.
+        lastError = new HttpError(res.status, url);
         const retryAfter = Number(res.headers.get("retry-after"));
         await sleep(
           Number.isFinite(retryAfter) && retryAfter > 0
@@ -217,7 +240,9 @@ async function request(url: string, headers: Record<string, string>): Promise<Re
             : 400 * 2 ** attempt + Math.random() * 250,
         );
       } catch (err) {
-        if (err instanceof HttpError) throw err;
+        // A body that is not JSON (a maintenance page served with 200) will not parse on the
+        // next attempt either, so it is reported straight away rather than retried.
+        if (err instanceof HttpError || err instanceof SyntaxError) throw err;
         lastError = err;
         // An abort is our own timer firing, not a transient network fault: the query was
         // too expensive for the index, and asking again changes nothing but the wait.
@@ -266,8 +291,7 @@ export async function getJson<T>(url: string, ttl: number = TTL.search): Promise
   const cached = cacheGet<T>(url);
   if (cached !== undefined) return cached;
   return coalesce(url, async () => {
-    const res = await request(url, {});
-    const data = (await res.json()) as T;
+    const data = await request(url, {}, (res) => res.json() as Promise<T>);
     cacheSet(url, data, ttl);
     return data;
   });
@@ -279,8 +303,7 @@ export async function getText(url: string, ttl: number = TTL.static): Promise<st
   const cached = cacheGet<string>(key);
   if (cached !== undefined) return cached;
   return coalesce(key, async () => {
-    const res = await request(url, { accept: "text/plain, text/markdown, */*" });
-    const text = await res.text();
+    const text = await request(url, { accept: "text/plain, text/markdown, */*" }, (res) => res.text());
     cacheSet(key, text, ttl);
     return text;
   });
@@ -298,11 +321,11 @@ export async function getGithubJson<T>(url: string, ttl: number = TTL.static): P
   const cached = cacheGet<T>(key);
   if (cached !== undefined) return cached;
   return coalesce(key, async () => {
-    const res = await request(url, {
-      accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
-    });
-    const data = (await res.json()) as T;
+    const data = await request(
+      url,
+      { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
+      (res) => res.json() as Promise<T>,
+    );
     cacheSet(key, data, ttl);
     return data;
   });

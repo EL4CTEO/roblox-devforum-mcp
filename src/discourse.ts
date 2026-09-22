@@ -94,6 +94,8 @@ interface SearchResponse {
 interface TopicResponse extends RawTopic {
   post_stream?: { posts?: RawPost[]; stream?: number[] };
   details?: { created_by?: { username?: string } };
+  /** The solved plugin's pointer to the accepted reply, present even when it is off-chunk. */
+  accepted_answer?: { post_number?: number; username?: string } | null;
 }
 
 /* --------------------------------- queries -------------------------------- */
@@ -227,6 +229,11 @@ export async function getPostsByIds(topicId: number, ids: number[]): Promise<Raw
   for (const id of ids) url.searchParams.append("post_ids[]", String(id));
   const data = await getJson<{ post_stream?: { posts?: RawPost[] } }>(url.toString(), TTL.thread);
   return data.post_stream?.posts ?? [];
+}
+
+/** One post by its position in the thread, wherever it sits in the stream. */
+export async function getPostByNumber(topicId: number, postNumber: number): Promise<RawPost> {
+  return getJson<RawPost>(`${BASE_URL}/posts/by_number/${topicId}/${postNumber}.json`, TTL.thread);
 }
 
 export type Listing = "latest" | "top";
