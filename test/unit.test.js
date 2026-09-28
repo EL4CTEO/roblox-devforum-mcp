@@ -31,6 +31,8 @@ test("htmlToMarkdown renders links, lists and images", () => {
 
 test("decodeEntities handles named, decimal and hex references", () => {
   assert.equal(decodeEntities("a &amp; b &#65; &#x42; &hellip;"), "a & b A B …");
+  // Out-of-range references used to throw a RangeError out of the whole post render.
+  assert.equal(decodeEntities("&#99999999; &#x110000;"), "&#99999999; &#x110000;");
 });
 
 test("truncate respects the token budget and flags the cut", () => {
@@ -67,14 +69,16 @@ test("buildSearchQuery emits Discourse advanced-search syntax", () => {
     category: "engine-bugs",
     tags: ["datastore"],
     solvedOnly: true,
-    minLikes: 5,
     after: "2025-01-01",
     order: "latest",
   });
   assert.equal(
     q,
-    "DataStore 502 #engine-bugs tags:datastore status:solved min_post_likes:5 after:2025-01-01 order:latest",
+    "DataStore 502 #engine-bugs tags:datastore status:solved after:2025-01-01 order:latest",
   );
+  // min_post_likes is never sent: the index misapplies it and, with status:solved, empties
+  // queries that have qualifying threads. The floor is applied to the returned posts.
+  assert.doesNotMatch(buildSearchQuery({ query: "datastore", minLikes: 5 }), /min_post_likes/);
   assert.equal(buildSearchQuery({ query: "raycast", order: "relevance" }), "raycast");
 });
 
@@ -685,6 +689,9 @@ test("authorBadge names only what a reader can act on", async () => {
   assert.equal(authorBadge({ admin: true }), "Roblox staff");
   assert.equal(authorBadge({ moderator: true }), "Roblox staff");
   assert.equal(authorBadge({ flair_name: "Programmers" }), "Programmers");
+  // Roblox engineers post with every Discourse staff flag false; the group is the signal.
+  assert.equal(authorBadge({ staff: false, primary_group_name: "Roblox_Staff", flair_name: "Roblox_Staff" }), "Roblox staff");
+  assert.equal(authorBadge({ flair_name: "Roblox_Staff" }), "Roblox staff");
 
   // Discourse flags its own bot as staff. "system (Roblox staff)" beside "This topic was
   // automatically opened" reads as a Roblox employee endorsing the thread.
@@ -1029,4 +1036,15 @@ test("a multi-phrasing merge honours order latest, and relevance counts agreemen
   const positions = new Map([[8, 4], [9, 0]]);
   const ranked = rank(topics, [], false, matchedBy, ["tween not playing", "tweenservice completed not firing"], positions);
   assert.equal(ranked[0].topic.id, 9);
+});
+
+test("only the category definition topic is dropped from a listing, not every pin", async () => {
+  const { isCategoryDefinition } = await import("../dist/discourse.js");
+  assert.equal(isCategoryDefinition({ id: 19285, title: "About the Announcements category", pinned: true }), true);
+  // Roblox pins the current Weekly Recap globally; dropping it made last week's "the latest".
+  assert.equal(
+    isCategoryDefinition({ id: 4894110, title: "Weekly Recap: September 21 - 25, 2026", pinned: true, pinned_globally: true }),
+    false,
+  );
+  assert.equal(isCategoryDefinition({ id: 1, title: "About the Announcements category", pinned: false }), false);
 });

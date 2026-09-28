@@ -126,37 +126,70 @@ function docMemberLine(entry: string, found: DocMember, what: string): string {
 /** Luau's own constructors on Instance; every other class is created through these. */
 const INSTANCE_CONSTRUCTORS = new Set(["new", "fromExisting"]);
 
+/**
+ * One enum, or one item of it. `prefixed` is whether the entry wrote the `Enum.` itself;
+ * without it, a name that is no enum returns undefined so the caller can try other readings.
+ *
+ * "Material.Neon" is the shorthand a model writes for Enum.Material.Neon, and it used to skip
+ * every check below: Material.TotallyFake and a lower-cased "material" were both answered
+ * "OK — Enum.Material exists" and counted under "all APIs are current and usable". The
+ * shorthand gets the same item and case checks, and the reply names the full spelling, since
+ * a bare `Material` is not a Luau global.
+ */
+async function checkEnum(
+  entry: string,
+  enumName: string,
+  itemName: string | undefined,
+  prefixed: boolean,
+): Promise<string | undefined> {
+  const enumType = await findEnum(enumName);
+  if (!enumType) return prefixed ? `${STATE.missing} ${entry} — no Enum named "${enumName}".` : undefined;
+  if (enumType.Name !== enumName) {
+    return wrongCase(entry, `Enum.${enumType.Name}${itemName === undefined ? "" : `.${itemName}`}`);
+  }
+  const items = enumType.Items ?? [];
+  // The item used to be thrown away here, so "Enum.Material.TotallyFakeMaterial"
+  // came back "OK — Enum.Material exists" and was counted under "all APIs are
+  // current and usable". A fabricated EnumItem is the single most common way a
+  // model gets Roblox code wrong, and it is exactly what this tool is for.
+  if (itemName === undefined) {
+    return `${STATE.ok} ${entry} — Enum.${enumType.Name} exists (${items.length} items).${prefixed ? "" : ` Write it Enum.${enumType.Name}.`}`;
+  }
+  const item = items.find((i) => i.Name === itemName);
+  if (item) {
+    const full = `Enum.${enumType.Name}.${item.Name}`;
+    return `${STATE.ok} ${entry} — ${full} = ${item.Value}.${prefixed ? "" : ` Write it ${full}.`}`;
+  }
+  const cased = items.find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
+  if (cased) return wrongCase(entry, `Enum.${enumType.Name}.${cased.Name}`);
+  const near = nearestNames(itemName, items.map((i) => i.Name));
+  return `${STATE.missing} ${entry} — Enum.${enumType.Name} has no item "${itemName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` It has ${items.length} items — call get_engine_api with "${enumType.Name}" to list them.`}`;
+}
+
 /** Check one check_api_health entry and describe it on a single line. */
 async function checkEntry(entry: string): Promise<string> {
   const { raw, className, memberName } = splitApiEntry(entry);
 
   // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
   const enumMatch = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(raw);
-  if (enumMatch?.[1]) {
-    const enumType = await findEnum(enumMatch[1]);
-    if (!enumType) return `${STATE.missing} ${entry} — no Enum named "${enumMatch[1]}".`;
-    if (enumType.Name !== enumMatch[1]) return wrongCase(entry, `Enum.${enumType.Name}${enumMatch[2] ? `.${enumMatch[2]}` : ""}`);
-    const items = enumType.Items ?? [];
-    const itemName = enumMatch[2];
-    // The item used to be thrown away here, so "Enum.Material.TotallyFakeMaterial"
-    // came back "OK — Enum.Material exists" and was counted under "all APIs are
-    // current and usable". A fabricated EnumItem is the single most common way a
-    // model gets Roblox code wrong, and it is exactly what this tool is for.
-    if (itemName === undefined) {
-      return `${STATE.ok} ${entry} — Enum.${enumType.Name} exists (${items.length} items).`;
-    }
-    const item = items.find((i) => i.Name === itemName);
-    if (item) return `${STATE.ok} ${entry} — Enum.${enumType.Name}.${item.Name} = ${item.Value}.`;
-    const cased = items.find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
-    if (cased) return wrongCase(entry, `Enum.${enumType.Name}.${cased.Name}`);
-    const near = nearestNames(itemName, items.map((i) => i.Name));
-    return `${STATE.missing} ${entry} — Enum.${enumType.Name} has no item "${itemName}".${near.length ? ` Closest: ${near.join(", ")}.` : ` It has ${items.length} items — call get_engine_api with "${enumType.Name}" to list them.`}`;
-  }
+  if (enumMatch?.[1]) return (await checkEnum(entry, enumMatch[1], enumMatch[2], true)) as string;
 
   const cls = await findClass(className);
   if (!cls) {
-    const enumType = await findEnum(className);
-    if (enumType) return `${STATE.ok} ${entry} — Enum.${enumType.Name} exists.`;
+    // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
+    const datatype = await findDatatype(className);
+
+    // Only a one- or two-segment entry can be the enum shorthand; a longer path is a class
+    // chain. Font is both an enum and a datatype, so there the shorthand has to name one of
+    // the enum's items — "Font.new" is the datatype's constructor, "Font.Arial" the EnumItem.
+    if (raw.split(".").length <= 2) {
+      const enumType = await findEnum(className);
+      const lower = memberName?.toLowerCase();
+      const isItem = lower !== undefined && (enumType?.Items ?? []).some((i) => i.Name.toLowerCase() === lower);
+      if (enumType && (!datatype || isItem)) {
+        return (await checkEnum(entry, className, memberName, false)) as string;
+      }
+    }
 
     const library = await findLibrary(className);
     if (library) {
@@ -174,8 +207,6 @@ async function checkEntry(entry: string): Promise<string> {
       return `${STATE.missing} ${entry} — the ${library} library has no "${memberName}".${near.length ? ` Closest: ${near.map((n) => `${library}.${n}`).join(", ")}.` : ""}`;
     }
 
-    // Datatypes such as Vector3 or CFrame live in the docs, not the class dump.
-    const datatype = await findDatatype(className);
     if (datatype) {
       const url = `https://create.roblox.com/docs/reference/engine/datatypes/${datatype}`;
       // The member used to be thrown away here, so "Vector3.TotallyFakeMember" was
@@ -391,9 +422,17 @@ export function registerDocsTools(server: McpServer): void {
           // it back, but only the bare name used to resolve: the prefixed form fell through
           // to the `Enum` datatype page, which is about enums in general and never mentions
           // the one that was asked about. "Enum.Material.Neon" names the same enum.
-          const enumName = /^Enum\.([A-Za-z0-9_]+)/.exec(entry.raw)?.[1] ?? args.name;
-          const enumType = await findEnum(enumName);
-          if (enumType) {
+          // "Material.Neon" is that same enum without its prefix, and used to fail outright.
+          // Font is an enum and a datatype both, so unprefixed, only an item name makes it the
+          // enum: "Font.new" is the datatype's constructor.
+          const prefixed = /^Enum\.([A-Za-z0-9_]+)/.exec(entry.raw)?.[1];
+          const enumType = await findEnum(prefixed ?? entry.className);
+          const lower = memberFilter?.toLowerCase();
+          const namesItem = (enumType?.Items ?? []).some((i) => i.Name.toLowerCase() === lower);
+          if (
+            enumType &&
+            (prefixed !== undefined || lower === undefined || namesItem || !(await findDatatype(entry.className)))
+          ) {
             const items = (enumType.Items ?? []).map((i) => `${i.Name} = ${i.Value}`).join(", ");
             return ok(`Enum.${enumType.Name}\n${items || "(no items)"}`);
           }
@@ -441,12 +480,20 @@ export function registerDocsTools(server: McpServer): void {
           args.include_inherited || memberFilter !== undefined ? await classChain(cls.Name) : [cls];
         const wanted = args.member_types ? new Set(args.member_types) : undefined;
         const filter = (args.filter ?? memberFilter)?.toLowerCase();
+        // A named member is a question about that member. As a substring, "Humanoid.Health"
+        // also listed HealthDisplayDistance, HealthDisplayType and MaxHealth; when the name
+        // exists it is matched whole (case-insensitively, so a deprecated twin still shows).
+        const exact =
+          args.filter === undefined &&
+          filter !== undefined &&
+          chain.some((c) => (c.Members ?? []).some((m) => m.Name.toLowerCase() === filter));
 
         const sections: string[] = [];
         for (const entry of chain) {
           const members = (entry.Members ?? []).filter((m) => {
             if (wanted && !wanted.has(m.MemberType as never)) return false;
-            if (filter && !m.Name.toLowerCase().includes(filter)) return false;
+            const name = m.Name.toLowerCase();
+            if (filter && (exact ? name !== filter : !name.includes(filter))) return false;
             return true;
           });
           if (members.length === 0) continue;

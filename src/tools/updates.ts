@@ -61,11 +61,17 @@ async function recapArchive(needed: number): Promise<RawTopic[]> {
     ),
   );
   const all = [...first];
+  const seen = new Set(first.map((t) => t.id));
   // Stop at the first empty page: anything past the end of the tag is a duplicate risk,
-  // not more archive.
+  // not more archive. Pages are bump-ordered and fetched at once, so a recap that collects
+  // a reply meanwhile moves up a page and would otherwise be listed twice — as two weeks.
   for (const batch of rest) {
     if (batch.length === 0) break;
-    all.push(...batch);
+    for (const topic of batch) {
+      if (seen.has(topic.id)) continue;
+      seen.add(topic.id);
+      all.push(topic);
+    }
   }
   return newestFirst(all);
 }
@@ -161,14 +167,21 @@ export function registerUpdateTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        const [rawRecaps, rawNotes, rawAnnouncements] = await Promise.all([
-          listTopics("latest", undefined, WEEKLY_RECAP_TAG),
+        // The recap body only depends on the recap listing, so it is fetched the moment that
+        // lands rather than after the slowest of the three listings — it used to be a fourth
+        // round trip in series with the rest.
+        const recapsP = listTopics("latest", undefined, WEEKLY_RECAP_TAG).then(newestFirst);
+        const bodyP = recapsP.then((list) =>
+          args.include_recap_body && list[0] ? getTopic(list[0].id) : undefined,
+        );
+        const [recaps, rawNotes, rawAnnouncements, recapTopic] = await Promise.all([
+          recapsP,
           listTopics("latest", "release-notes"),
           listTopics("latest", "announcements"),
+          bodyP,
         ]);
         // Every section here answers "what shipped recently", so all three are ordered by
         // publication rather than by the replies a months-old thread is still collecting.
-        const recaps = newestFirst(rawRecaps);
         const notes = newestFirst(rawNotes);
         const announcements = newestFirst(rawAnnouncements);
 
@@ -177,9 +190,8 @@ export function registerUpdateTools(server: McpServer): void {
         const latestRecap = recaps[0];
         if (latestRecap) {
           let block = `## Weekly Recap\n${latestRecap.title}\npublished ${relativeDate(latestRecap.created_at)} · ${topicUrl(latestRecap.id, latestRecap.slug)}`;
-          if (args.include_recap_body) {
-            const topic = await getTopic(latestRecap.id);
-            const body = htmlToMarkdown(topic.post_stream?.posts?.[0]?.cooked ?? "", { keepQuotes: true });
+          if (recapTopic) {
+            const body = htmlToMarkdown(recapTopic.post_stream?.posts?.[0]?.cooked ?? "", { keepQuotes: true });
             if (body) block += `\n\n${truncate(body, Math.floor(args.max_tokens * 0.55), "open the recap")}`;
           }
           const older = recaps.slice(1).filter((t) => withinDays(t, args.days));

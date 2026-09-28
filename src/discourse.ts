@@ -82,6 +82,8 @@ export interface RawPost {
   trust_level?: number;
   /** The group badge Discourse shows beside a name, e.g. "Programmers", "Roblox_Staff". */
   flair_name?: string | null;
+  /** The group a user displays as their own; Roblox employees are "Roblox_Staff". */
+  primary_group_name?: string | null;
   actions_summary?: Array<{ id: number; count?: number }>;
 }
 
@@ -105,7 +107,6 @@ export interface SearchOptions {
   category?: string;
   tags?: string[];
   solvedOnly?: boolean;
-  minLikes?: number;
   after?: string;
   order?: "relevance" | "latest" | "likes" | "views";
   page?: number;
@@ -117,7 +118,10 @@ export function buildSearchQuery(opts: SearchOptions): string {
   if (opts.category) parts.push(`#${opts.category}`);
   if (opts.tags?.length) parts.push(`tags:${opts.tags.join(",")}`);
   if (opts.solvedOnly) parts.push("status:solved");
-  if (opts.minLikes && opts.minLikes > 0) parts.push(`min_post_likes:${opts.minLikes}`);
+  // No `min_post_likes:`. The index applies it to something other than the posts it returns
+  // — "datastore min_post_likes:100" still answers with 4-like posts — and paired with
+  // status:solved it returns nothing at all for queries with dozens of qualifying threads.
+  // The floor is applied to the returned posts instead, where it means what it says.
   if (opts.after) parts.push(`after:${opts.after}`);
   if (opts.order && opts.order !== "relevance") parts.push(`order:${opts.order}`);
   return parts.filter(Boolean).join(" ");
@@ -259,8 +263,19 @@ export async function listTopics(
   if (listing === "top" && period) url.searchParams.set("period", period);
   if (page > 0) url.searchParams.set("page", String(page));
   const data = await getJson<{ topic_list?: { topics?: RawTopic[] } }>(url.toString(), TTL.search);
-  // "About the … category" topics are pinned to every listing and never carry real content.
-  return (data.topic_list?.topics ?? []).filter((t) => !t.pinned && !t.pinned_globally);
+  return (data.topic_list?.topics ?? []).filter((t) => !isCategoryDefinition(t));
+}
+
+/**
+ * The "About the … category" topic Discourse pins to the top of every category listing.
+ *
+ * Every pinned topic used to be dropped as one of these, but Roblox pins the current Weekly
+ * Recap globally: get_whats_new and get_weekly_recap both called the previous week's digest
+ * "the latest", and list_recent never showed the newest announcement. Only the definition
+ * topic carries nothing; a pin is otherwise Roblox saying "read this".
+ */
+export function isCategoryDefinition(topic: RawTopic): boolean {
+  return Boolean(topic.pinned) && /^About the .+ category$/i.test(topic.title.trim());
 }
 
 /** The Announcements tag Roblox puts on its weekly "what shipped" digest. */

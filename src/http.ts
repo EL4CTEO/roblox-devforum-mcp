@@ -1,8 +1,10 @@
 /** Shared HTTP layer: browser-like UA, timeouts, retry/backoff, TTL cache, concurrency cap. */
 
+import { VERSION } from "./version.js";
+
 const UA =
   process.env.DEVFORUM_USER_AGENT ??
-  "Mozilla/5.0 (compatible; roblox-devforum-mcp/1.0; +https://github.com/EL4CTEO/roblox-devforum-mcp)";
+  `Mozilla/5.0 (compatible; roblox-devforum-mcp/${VERSION}; +https://github.com/EL4CTEO/roblox-devforum-mcp)`;
 
 /** Lives here rather than in discourse.ts so the category loader can use it without a cycle. */
 export const BASE_URL = (process.env.DEVFORUM_BASE_URL ?? "https://devforum.roblox.com").replace(/\/+$/, "");
@@ -215,8 +217,12 @@ async function request<T>(
   read: (res: Response) => Promise<T>,
 ): Promise<T> {
   const host = safeHost(url);
-  const started = Date.now();
   await acquire(host);
+  // The deadline starts once a slot is held. It used to start before the wait for one, so a
+  // request queued behind a busy fan-out (five phrasings, a dozen docs pages) reached the
+  // network with a sliver of its budget left — or the 500 ms floor — and timed out on a
+  // forum that was answering every other request in a second.
+  const started = Date.now();
   try {
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {

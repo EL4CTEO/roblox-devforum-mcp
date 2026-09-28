@@ -85,6 +85,8 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: s
   ];
   if (topic.tags?.length) meta.push(topic.tags.slice(0, 4).join(", "));
   if (matchedBy && matchedBy.length > 1) meta.push(`matched ${matchedBy.length} phrasings`);
+  // A listing puts pins first whatever their age, so say why a topic leads the list.
+  if (topic.pinned || topic.pinned_globally) meta.push("pinned");
 
   // Discourse returns whichever post matched, often a reply deep in the thread. Saying so
   // stops the excerpt reading as a summary of the topic — "Github link is broken, is this
@@ -146,14 +148,34 @@ export function renderWithin(
  * trust badge would repeat one signal and mislead everywhere else.
  */
 export function authorBadge(post: RawPost): string {
-  // Discourse marks its own bot as staff, and it posts "This topic was automatically
-  // opened" into staff threads. Labelling that "Roblox staff" reads as a Roblox employee
-  // endorsing the thread.
-  if (post.username === "system") return "";
-  if (post.staff === true || post.admin === true || post.moderator === true) {
-    return "Roblox staff";
-  }
+  if (isRobloxStaff(post)) return "Roblox staff";
   return post.flair_name ?? "";
+}
+
+/** The DevForum group every Roblox employee account belongs to. */
+const STAFF_GROUP = "Roblox_Staff";
+
+/**
+ * Whether a post is written by Roblox.
+ *
+ * Discourse's staff flag is only half of it: Roblox engineers post with staff, admin and
+ * moderator all false, and are known only by their Roblox_Staff group. get_thread ordered
+ * replies staff-first on the flag alone, so the engineer who answered a bug report sorted
+ * among the community replies and could be cut by max_posts.
+ *
+ * Discourse also marks its own bot as staff, and it posts "This topic was automatically
+ * opened" into staff threads. Labelling that "Roblox staff" reads as a Roblox employee
+ * endorsing the thread.
+ */
+export function isRobloxStaff(post: RawPost): boolean {
+  if (post.username === "system") return false;
+  return (
+    post.staff === true ||
+    post.admin === true ||
+    post.moderator === true ||
+    post.primary_group_name === STAFF_GROUP ||
+    post.flair_name === STAFF_GROUP
+  );
 }
 
 function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
@@ -243,8 +265,8 @@ export function broaden(query: string): string | undefined {
 }
 
 /**
- * Discourse accepts `min_post_likes:` but does not actually enforce it — a search for
- * min_post_likes:100 still returns posts with three likes — so the floor is applied here.
+ * The min_likes floor, applied to the posts the search returned. Discourse's own
+ * `min_post_likes:` is not sent at all: see buildSearchQuery.
  */
 function applyMinLikes(topics: RawTopic[], posts: RawPost[], minLikes: number | undefined): RawTopic[] {
   if (!minLikes || minLikes <= 0) return topics;
@@ -286,7 +308,6 @@ export function registerForumTools(server: McpServer): void {
           category: category.slug,
           tags: args.tags,
           solvedOnly: args.solved_only,
-          minLikes: args.min_likes,
           after: args.after,
           order: args.order,
         });
@@ -297,13 +318,18 @@ export function registerForumTools(server: McpServer): void {
         const topics = applyMinLikes(byOrder, posts, args.min_likes);
         const label = queries.map((q) => `"${q}"`).join(" / ");
         if (topics.length === 0) {
+          // "No threads matched" was printed ahead of "12 threads matched the text", which
+          // contradicts itself; a floor that emptied the list is a different answer.
+          if (args.min_likes && byOrder.length > 0) {
+            return ok(
+              `None of the ${plural(byOrder.length, "thread")} matching ${label}${skippedNote(failed)} has a matching post with ${args.min_likes}+ likes — lower min_likes.`,
+            );
+          }
           const active = activeFilters(args);
-          const floor = args.min_likes
-            ? ` ${found.length > 0 ? `${found.length} threads matched the text but none reached` : "Nothing reached"} ${args.min_likes}+ likes — lower min_likes.`
-            : active.length > 0
-              ? ` Active filters: ${active.join(", ")} — try dropping one, or use the raw error text.`
-              : " Try fewer words or the raw error text.";
-          return ok(`No DevForum threads matched ${label}${skippedNote(failed)}.${floor}`);
+          const hint = active.length > 0
+            ? ` Active filters: ${active.join(", ")} — try dropping one, or use the raw error text.`
+            : " Try fewer words or the raw error text.";
+          return ok(`No DevForum threads matched ${label}${skippedNote(failed)}.${hint}`);
         }
         const ranked = rank(topics, posts, args.order !== "relevance", matchedBy, queries, positions).slice(0, args.limit);
         const body = ranked
@@ -466,7 +492,7 @@ export function registerForumTools(server: McpServer): void {
           .filter((p) => p !== first && p !== accepted && !isAutomated(p))
           .sort((a, b) => {
             const likes = (p: RawPost) => p.actions_summary?.find((x) => x.id === 2)?.count ?? 0;
-            const staff = (p: RawPost) => (p.staff || p.admin || p.moderator ? 1 : 0);
+            const staff = (p: RawPost) => (isRobloxStaff(p) ? 1 : 0);
             return staff(b) - staff(a) || likes(b) - likes(a) || a.post_number - b.post_number;
           });
 

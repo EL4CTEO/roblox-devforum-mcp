@@ -5,10 +5,15 @@ const NAMED: Record<string, string> = {
   mdash: "—", ndash: "–", rsquo: "'", lsquo: "'", ldquo: '"', rdquo: '"', middot: "·",
 };
 
+/** A numeric reference outside Unicode is left as written: fromCodePoint throws on it. */
+function codePoint(whole: string, value: number): string {
+  return Number.isInteger(value) && value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : whole;
+}
+
 export function decodeEntities(input: string): string {
   return input
-    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (m, h: string) => codePoint(m, parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (m, d: string) => codePoint(m, Number(d)))
     .replace(/&([a-z]+);/gi, (m, n: string) => NAMED[n.toLowerCase()] ?? m);
 }
 

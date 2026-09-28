@@ -30,13 +30,21 @@ const dump = {
     {
       Name: "Humanoid",
       Superclass: "Instance",
-      Members: [{ MemberType: "Function", Name: "MoveTo", ReturnType: { Name: "null" }, Parameters: [{ Name: "location", Type: { Name: "Vector3" } }] }],
+      Members: [
+        { MemberType: "Function", Name: "MoveTo", ReturnType: { Name: "null" }, Parameters: [{ Name: "location", Type: { Name: "Vector3" } }] },
+        { MemberType: "Property", Name: "Health", ValueType: { Name: "float" } },
+        { MemberType: "Property", Name: "MaxHealth", ValueType: { Name: "float" } },
+      ],
     },
   ],
-  Enums: [{ Name: "Material", Items: [{ Name: "Neon", Value: 288 }, { Name: "Plastic", Value: 256 }] }],
+  Enums: [
+    { Name: "Material", Items: [{ Name: "Neon", Value: 288 }, { Name: "Plastic", Value: 256 }] },
+    { Name: "Font", Items: [{ Name: "Arial", Value: 1 }] },
+  ],
 };
 
 const pages = {
+  "datatypes/Font.yaml": "name: Font\ntype: datatype\nsummary: |\n  A font.\nconstructors:\n  - name: Font.new\n    summary: |\n      Makes one.\n",
   "libraries/task.yaml": "name: task\ntype: library\nfunctions:\n  - name: task.wait\n    summary: |\n      Yields.\n    parameters:\n      - name: duration\n        type: number\n    tags: []\n    deprecation_message: ''\n",
   "globals/LuaGlobals.yaml": "name: Lua globals\ntype: global\nfunctions:\n  - name: print\n    summary: |\n      Prints.\n    tags: []\n",
   "globals/RobloxGlobals.yaml":
@@ -44,6 +52,7 @@ const pages = {
 };
 
 let forum = () => undefined;
+const json200 = (body) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
 globalThis.fetch = async (input) => {
   const url = String(input);
@@ -159,4 +168,74 @@ test("get_thread hoists an accepted answer that sits past the first chunk", asyn
   assert.match(text, /#40 by u40 ✅ ACCEPTED ANSWER/);
   assert.match(text, /the real answer/);
   assert.match(text, /answered \(a reply the asker marked as the solution\)/);
+});
+
+test("the enum shorthand gets the item and case checks the Enum. form gets", async () => {
+  const { text } = await call("check_api_health", {
+    members: ["Material.Neon", "Material.TotallyFake", "material", "Font.new", "Font.Arial"],
+  });
+  assert.match(lineFor(text, "Material.Neon"), /^OK .*Write it Enum\.Material\.Neon/);
+  // Both used to be "OK — Enum.Material exists".
+  assert.match(lineFor(text, "Material.TotallyFake"), /^NOT FOUND .*no item "TotallyFake"/);
+  assert.match(lineFor(text, "material"), /^WRONG CASE .*Enum\.Material/);
+  // Font is an enum and a datatype: the constructor is the datatype's, the item the enum's.
+  assert.match(lineFor(text, "Font.new"), /^OK .*datatype/);
+  assert.match(lineFor(text, "Font.Arial"), /^OK .*Enum\.Font\.Arial = 1/);
+});
+
+test("get_engine_api resolves the enum shorthand and a named member exactly", async () => {
+  const shorthand = await call("get_engine_api", { name: "Material.Neon" });
+  assert.equal(shorthand.isError, false, shorthand.text);
+  assert.match(shorthand.text, /^Enum\.Material\nNeon = 288/);
+  const health = await call("get_engine_api", { name: "Humanoid.Health" });
+  assert.match(health.text, /Health: float/);
+  assert.doesNotMatch(health.text, /MaxHealth/, "a named member is matched whole, not as a substring");
+  const substring = await call("get_engine_api", { name: "Humanoid", filter: "health" });
+  assert.match(substring.text, /MaxHealth/, "an explicit filter stays a substring");
+});
+
+test("get_thread puts a Roblox_Staff reply ahead of community replies", async () => {
+  clearCache();
+  const post = (n, extra = {}) => ({ id: 2000 + n, post_number: n, username: `u${n}`, cooked: `<p>post ${n}</p>`, ...extra });
+  forum = (url) =>
+    url.includes("/t/66.json")
+      ? json200({
+          id: 66,
+          title: "Engine bug",
+          posts_count: 4,
+          post_stream: {
+            posts: [
+              post(1),
+              post(2, { actions_summary: [{ id: 2, count: 30 }] }),
+              post(3, { actions_summary: [{ id: 2, count: 10 }] }),
+              post(4, { username: "engineer", staff: false, primary_group_name: "Roblox_Staff", flair_name: "Roblox_Staff" }),
+            ],
+            stream: [2001, 2002, 2003, 2004],
+          },
+        })
+      : undefined;
+  const { text } = await call("get_thread", { topic: 66, max_posts: 2 });
+  assert.match(text, /#4 by engineer \(Roblox staff\)/);
+  assert.doesNotMatch(text, /#2 by u2/);
+});
+
+test("get_weekly_recap reads the pinned current recap, not the one before it", async () => {
+  clearCache();
+  forum = (url) => {
+    if (url.includes("/tag/weekly-recap/l/latest.json")) {
+      return json200({
+        topic_list: {
+          topics: [
+            { id: 3, title: "Weekly Recap: September 21 - 25", pinned: true, pinned_globally: true, created_at: "2026-09-25T21:00:00Z" },
+            { id: 2, title: "Weekly Recap: September 14–20", created_at: "2026-09-18T22:00:00Z" },
+            { id: 1, title: "About the Announcements category", pinned: true, created_at: "2021-01-01T08:00:00Z" },
+          ],
+        },
+      });
+    }
+    return undefined;
+  };
+  const { text } = await call("get_weekly_recap", { list: true, limit: 5 });
+  assert.match(text, /^2 Weekly Recaps[\s\S]*- Weekly Recap: September 21 - 25\n[\s\S]*September 14–20/);
+  assert.doesNotMatch(text, /About the/);
 });

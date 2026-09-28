@@ -521,12 +521,26 @@ export async function classChain(name: string): Promise<ApiClass[]> {
  * a class lookup for them wrongly reports "not found". The docs are the source of truth.
  */
 export async function findDatatype(name: string): Promise<string | undefined> {
-  const target = name.toLowerCase();
-  const paths = await docPaths();
-  const match = paths.find(
-    (p) => p.toLowerCase() === `${DOCS_ROOT}reference/engine/datatypes/${target}.yaml`,
-  );
+  const match = await findDocPath(`${DOCS_ROOT}reference/engine/datatypes/${name}.yaml`);
   return match ? titleOf(match) : undefined;
+}
+
+/** Lower-cased path -> path, built once per docs tree. */
+const pathIndex = new WeakMap<string[], Map<string, string>>();
+
+/**
+ * A docs path by case-insensitive lookup. check_api_health asks this up to three times per
+ * entry (datatype, library, enum-or-datatype), and each ask used to lower-case and compare
+ * the whole ~8,000-path tree: 25 entries walked it seventy-odd times.
+ */
+async function findDocPath(path: string): Promise<string | undefined> {
+  const paths = await docPaths();
+  let index = pathIndex.get(paths);
+  if (!index) {
+    index = new Map(paths.map((p) => [p.toLowerCase(), p]));
+    pathIndex.set(paths, index);
+  }
+  return index.get(path.toLowerCase());
 }
 
 /**
@@ -538,8 +552,7 @@ export async function findDatatype(name: string): Promise<string | undefined> {
  * carry every one, deprecations included.
  */
 export async function findLibrary(name: string): Promise<string | undefined> {
-  const target = `${DOCS_ROOT}reference/engine/libraries/${name.toLowerCase()}.yaml`;
-  const match = (await docPaths()).find((p) => p.toLowerCase() === target);
+  const match = await findDocPath(`${DOCS_ROOT}reference/engine/libraries/${name}.yaml`);
   return match ? titleOf(match) : undefined;
 }
 
