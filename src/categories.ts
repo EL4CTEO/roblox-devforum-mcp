@@ -180,8 +180,15 @@ export function resetCategories(): void {
 
 /* -------------------------------- accessors ------------------------------- */
 
+/**
+ * Accepts the spellings a caller copies from the forum, not only the slug: "Scripting
+ * Support" (the display name), "#scripting-support" (search syntax), "scripting_support".
+ * The space was rejected with "did you mean scripting-support?" — a round trip to be told
+ * the one change that could have been made silently.
+ */
 export function resolveCategory(slug: string): Category | undefined {
-  return current.bySlug.get(slug.trim().toLowerCase());
+  const key = slug.trim().toLowerCase().replace(/^#/, "").replace(/[\s_]+/g, "-");
+  return current.bySlug.get(key);
 }
 
 export function knownSlugs(): string[] {

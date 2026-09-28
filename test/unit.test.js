@@ -1048,3 +1048,38 @@ test("only the category definition topic is dropped from a listing, not every pi
   );
   assert.equal(isCategoryDefinition({ id: 1, title: "About the Announcements category", pinned: false }), false);
 });
+
+test("a topic reference yields the right topic and the post it links to", async () => {
+  const { parseTopicId, parsePostNumber } = await import("../dist/tools/util.js");
+  const long = "https://devforum.roblox.com/t/reference-instances-directly-with-attributes/4753441/133";
+  assert.equal(parseTopicId(long), 4753441);
+  assert.equal(parsePostNumber(long), 133);
+  // The short form used to read as slug "123", topic 45 — the wrong thread entirely.
+  assert.equal(parseTopicId("https://devforum.roblox.com/t/123/45"), 123);
+  assert.equal(parsePostNumber("https://devforum.roblox.com/t/123/45"), 45);
+  assert.equal(parseTopicId("https://devforum.roblox.com/t/2024-roadmap/987?u=someone"), 987);
+  assert.equal(parsePostNumber("https://devforum.roblox.com/t/2024-roadmap/987"), undefined);
+  assert.equal(parseTopicId("some-slug/321"), 321);
+  assert.equal(parseTopicId(" 42 "), 42);
+  assert.equal(parseTopicId("nonsense"), undefined);
+});
+
+test("a category is found under the spellings copied from the forum", async () => {
+  const { resolveCategory } = await import("../dist/categories.js");
+  for (const spelled of ["scripting-support", "Scripting Support", "#scripting-support", "scripting_support"]) {
+    assert.equal(resolveCategory(spelled)?.slug, "scripting-support", spelled);
+  }
+  assert.equal(resolveCategory("scripting"), undefined);
+});
+
+test("splitApiEntry reads a lookup by name mid-chain as the child it names", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+  assert.deepEqual(splitApiEntry('game:GetService("Players").LocalPlayer'), {
+    raw: "DataModel.Players.LocalPlayer",
+    className: "Players",
+    memberName: "LocalPlayer",
+  });
+  assert.equal(splitApiEntry("char:WaitForChild('Humanoid'):MoveTo(pos)").raw, "char.Humanoid.MoveTo");
+  // At the end of the entry the call is the thing asked about, and is kept.
+  assert.equal(splitApiEntry('game:GetService("Players")').raw, "DataModel.GetService");
+});

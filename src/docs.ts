@@ -66,6 +66,9 @@ export interface DocHit {
 const STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "is", "are", "how", "do",
   "does", "what", "why", "when", "with", "my", "it", "roblox", "can", "get", "use", "using",
+  // Question verbs. Titles are matched as substrings, so "how to make a leaderboard" ranked
+  // avatar/makeup third on "make" alone.
+  "make", "making", "should", "way", "best", "you", "your", "want", "need",
 ]);
 
 export function queryTerms(query: string): string[] {
@@ -108,6 +111,12 @@ function stripMdx(text: string): string {
     .replace(/<\/?[A-Z]\w*(?:\s[^<>]*?)?\/?>/g, "")
     // The handful of raw HTML tags the guides use are layout too; their text is the content.
     .replace(/<\/?(?:figure|figcaption|div|span|center|br|p)(?:\s[^<>]*?)?\/?>/gi, "")
+    // A screenshot is a repo-relative src the caller cannot open; only its alt text says
+    // anything, and most guide images have none.
+    .replace(/<img\b[^<>]*>/gi, (tag) => {
+      const alt = /\balt="([^"]*)"/i.exec(tag)?.[1];
+      return alt ? `[image: ${alt}]` : "";
+    })
     .replace(/\n{3,}/g, "\n\n");
 }
 
@@ -330,7 +339,10 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
       };
       let source: string;
       try {
-        source = stripPreamble(await fetchDoc(candidate.path));
+        // MDX components are stripped before matching, not after: a snippet cut out of the
+        // raw guide could start inside a tag and reach the caller as `…0%" /> ### Tips`.
+        const raw = stripPreamble(await fetchDoc(candidate.path));
+        source = candidate.path.endsWith(".md") ? stripMdx(raw) : raw;
       } catch {
         return hit; // path score alone still ranks it
       }

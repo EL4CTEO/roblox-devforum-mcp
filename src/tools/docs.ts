@@ -68,10 +68,18 @@ function filterDatatypeMembers(page: string, memberName: string): string {
  * "game." prefix left the member to be looked up as a class, so game:GetService reported
  * NOT FOUND. The class is the segment the member hangs off, so a path like
  * "game.Workspace.Terrain" still asks about Workspace.Terrain.
+ *
+ * A lookup by name in the middle of a chain is the child it names:
+ * `game:GetService("Players").LocalPlayer` is Players.LocalPlayer. Everything from the first
+ * "(" used to be cut, so that entry was answered as GetService and LocalPlayer never checked.
  */
 export function splitApiEntry(entry: string): { raw: string; className: string; memberName?: string } {
   const raw = entry
     .trim()
+    .replace(
+      /[:.](?:GetService|WaitForChild|FindFirstChild|FindFirstChildOfClass|FindFirstChildWhichIsA)\(\s*["']([A-Za-z0-9_]+)["'][^)]*\)(?=[.:])/g,
+      ".$1",
+    )
     .replace(/\(.*$/, "")
     .replace(/:/g, ".")
     .replace(/^\.+|\.+$/g, "")
@@ -102,7 +110,49 @@ const STATE = {
   restricted: "RESTRICTED",
   missing: "NOT FOUND ",
   wrongCase: "WRONG CASE",
+  unchecked: "UNCHECKED ",
 } as const;
+
+type Walked = { className: string; memberName: string } | { unresolved: string; why: string };
+
+/**
+ * Follow a dotted path the way Luau evaluates it: "game.Players.LocalPlayer.Character" is
+ * DataModel, then the Players service, then Players.LocalPlayer (a Player), then its
+ * Character. Only the last two segments used to be read, so that line — valid in nearly
+ * every LocalScript — came back "NOT FOUND — no class LocalPlayer".
+ *
+ * A segment spelled exactly like a class is a child of that class (a service, or `.Humanoid`
+ * on a character); otherwise it is followed through the property of that name. Two things
+ * stop the walk rather than guess: a child the game named itself ("workspace.Map.Door"), and
+ * a property typed plain Instance ("script.Parent"), which can hold any class at runtime —
+ * both used to end in "Instance has no member Touched" for code that works.
+ * Returns undefined when the root is not a class, so the caller keeps its own reading.
+ */
+async function walkPath(segments: string[]): Promise<Walked | undefined> {
+  const root = segments[0] === undefined ? undefined : await findClass(segments[0]);
+  const last = segments[segments.length - 1];
+  if (!root || last === undefined) return undefined;
+  let current = root.Name;
+  for (const segment of segments.slice(1, -1)) {
+    const named = await findClass(segment);
+    if (named && named.Name === segment) {
+      current = named.Name;
+      continue;
+    }
+    // Exact spelling only: DataModel's deprecated `lighting` (typed Instance) answered for
+    // "game.Lighting" when case was ignored, and ClockTime came back NOT FOUND.
+    const found = await resolveMember(current, segment);
+    const property = found?.exact && found.member.MemberType === "Property" ? found.member : undefined;
+    if (!property) {
+      return { unresolved: segment, why: `is not a member of ${current}, so it is a child the game names itself` };
+    }
+    const typed = property.ValueType?.Name;
+    const next = typed === undefined || typed === "Instance" ? undefined : await findClass(typed);
+    if (!next) return { unresolved: segment, why: `is typed ${typed ?? "unknown"}, so it can hold any class at runtime` };
+    current = next.Name;
+  }
+  return { className: current, memberName: last };
+}
 
 /**
  * Luau is case-sensitive, so `Enum.Material.neon` and `humanoid:moveTo()` fail at runtime.
@@ -168,11 +218,22 @@ async function checkEnum(
 
 /** Check one check_api_health entry and describe it on a single line. */
 async function checkEntry(entry: string): Promise<string> {
-  const { raw, className, memberName } = splitApiEntry(entry);
+  const split = splitApiEntry(entry);
+  const { raw } = split;
+  let { className, memberName } = split;
 
   // "Enum.RaycastFilterType" and "Enum.Material.Neon" name an enum, not a class.
   const enumMatch = /^Enum\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?/.exec(raw);
   if (enumMatch?.[1]) return (await checkEnum(entry, enumMatch[1], enumMatch[2], true)) as string;
+
+  const segments = raw.split(".").filter(Boolean);
+  if (segments.length > 2) {
+    const walked = await walkPath(segments);
+    if (walked && "unresolved" in walked) {
+      return `${STATE.unchecked} ${entry} — "${walked.unresolved}" ${walked.why}, and its class cannot be known from here. Check the member on that class instead, e.g. "Part.Touched".`;
+    }
+    if (walked) ({ className, memberName } = walked);
+  }
 
   const cls = await findClass(className);
   if (!cls) {
@@ -230,7 +291,10 @@ async function checkEntry(entry: string): Promise<string> {
     }
 
     const near = await suggestClasses(className);
-    return `${STATE.missing} ${entry} — no class "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+    // A bare name was looked up as every kind of API, not only as a class; "no class
+    // LoadLibrary" read as though a global of that name might still exist.
+    const what = memberName === undefined ? "class, enum, datatype, library or global named" : "class";
+    return `${STATE.missing} ${entry} — no ${what} "${className}" in the current API.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
   }
 
   const notes: string[] = [];
@@ -255,11 +319,23 @@ async function checkEntry(entry: string): Promise<string> {
     if (cls.Name === "Instance" && INSTANCE_CONSTRUCTORS.has(memberName)) {
       return `${STATE.ok} ${entry} — constructor, not a class member; it is not listed in the API dump.`;
     }
+    // "Character.Humanoid", "game.Players": indexing by name reaches a child, and a child
+    // named after its class is the norm. That is not a missing API, but it is not a promise
+    // either — the child may not exist yet.
+    const child = await findClass(memberName);
+    if (child && child.Name === memberName) {
+      return `${STATE.ok} ${entry} — not a member of ${cls.Name}: this indexes a child named "${memberName}", which errors if it is missing. Use FindFirstChild or WaitForChild when it may not exist yet.`;
+    }
     if (memberName === "new" && !cls.Tags?.includes("NotCreatable")) {
       return `${STATE.missing} ${entry} — classes have no .new; create one with Instance.new("${cls.Name}").`;
     }
     const near = await suggestMembers(cls.Name, memberName);
-    return `${STATE.missing} ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed.${near.length ? ` Closest: ${near.join(", ")}.` : ""}`;
+    // With nothing close to suggest, the likelier reading of "game.ServerStorage.Tools" is a
+    // child the game created, and "it may have been removed" sent the caller hunting for an
+    // API that never existed. Both readings are named; neither is waved through.
+    return near.length
+      ? `${STATE.missing} ${entry} — ${cls.Name} has no member "${memberName}"; it may have been removed. Closest: ${near.join(", ")}.`
+      : `${STATE.missing} ${entry} — ${cls.Name} has no member "${memberName}". If it is a child your game creates, it is not an API and needs no check; otherwise it does not exist.`;
   }
 
   const { owner, member } = found;

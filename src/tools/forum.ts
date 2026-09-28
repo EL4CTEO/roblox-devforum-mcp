@@ -25,7 +25,7 @@ import {
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
 import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, orderMerged, rank, replyCount } from "../rank.js";
-import { ok, fail, toToolError, parseTopicId } from "./util.js";
+import { ok, fail, toToolError, parsePostNumber, parseTopicId } from "./util.js";
 
 /**
  * A plain string, not an enum: the ids and the tree come from the forum at runtime, so a
@@ -482,21 +482,33 @@ export function registerForumTools(server: McpServer): void {
         // promises to hoist the accepted answer showed three other replies and never
         // mentioned there was one. The solved plugin names its post number on the topic, so
         // it is fetched directly when the chunk does not hold it.
+        //
+        // A link to one reply (".../4753441/133") names the post the caller came for, and it
+        // used to be read as the topic alone: the reply was dropped unless it happened to
+        // rank. It now follows the opening post, fetched the same way when off-chunk.
         const acceptedNumber = topic.accepted_answer?.post_number;
+        const linkedNumber = parsePostNumber(asked);
+        const inChunk = (n: number | undefined) =>
+          n !== undefined && n > 1 ? all.find((p) => p.post_number === n) : undefined;
+        const offChunk = (n: number | undefined) =>
+          n !== undefined && n > 1 && !inChunk(n) ? getPostByNumber(topicId, n).catch(() => undefined) : undefined;
+        const [acceptedFetched, linkedFetched] = await Promise.all([offChunk(acceptedNumber), offChunk(linkedNumber)]);
         const accepted =
           all.find((p) => p.accepted_answer && p.post_number !== first?.post_number) ??
-          (acceptedNumber !== undefined && acceptedNumber > 1
-            ? await getPostByNumber(topicId, acceptedNumber).catch(() => undefined)
-            : undefined);
+          inChunk(acceptedNumber) ??
+          acceptedFetched;
+        const linked = inChunk(linkedNumber) ?? linkedFetched;
         const rest = all
-          .filter((p) => p !== first && p !== accepted && !isAutomated(p))
+          .filter((p) => p !== first && p !== accepted && p !== linked && !isAutomated(p))
           .sort((a, b) => {
             const likes = (p: RawPost) => p.actions_summary?.find((x) => x.id === 2)?.count ?? 0;
             const staff = (p: RawPost) => (isRobloxStaff(p) ? 1 : 0);
             return staff(b) - staff(a) || likes(b) - likes(a) || a.post_number - b.post_number;
           });
 
-        const chosen = [first, accepted, ...rest].filter((p): p is RawPost => Boolean(p)).slice(0, args.max_posts);
+        const chosen = [...new Set([first, linked, accepted, ...rest])]
+          .filter((p): p is RawPost => Boolean(p))
+          .slice(0, args.max_posts);
 
         // The topic endpoint omits has_accepted_answer even where search reports it, so a
         // thread search had just badged [answered] opened with no mention of one. The posts

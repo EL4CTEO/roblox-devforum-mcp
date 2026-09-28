@@ -24,9 +24,24 @@ const dump = {
       Tags: ["NotCreatable"],
       Members: [
         { MemberType: "Function", Name: "FindFirstChild", ReturnType: { Name: "Instance" }, Parameters: [{ Name: "name", Type: { Name: "string" } }] },
+        { MemberType: "Property", Name: "Parent", ValueType: { Name: "Instance" } },
         { MemberType: "Function", Name: "findFirstChild", Tags: ["Deprecated"], ReturnType: { Name: "Instance" }, Parameters: [{ Name: "name", Type: { Name: "string" } }] },
       ],
     },
+    {
+      Name: "DataModel",
+      Superclass: "Instance",
+      Members: [
+        { MemberType: "Property", Name: "Workspace", ValueType: { Name: "Workspace" } },
+        { MemberType: "Property", Name: "lighting", ValueType: { Name: "Instance" }, Tags: ["Deprecated"] },
+      ],
+    },
+    { Name: "Lighting", Superclass: "Instance", Members: [{ MemberType: "Property", Name: "ClockTime", ValueType: { Name: "float" } }] },
+    { Name: "Script", Superclass: "Instance", Members: [] },
+    { Name: "Workspace", Superclass: "Instance", Tags: ["NotCreatable", "Service"], Members: [] },
+    { Name: "Players", Superclass: "Instance", Tags: ["NotCreatable", "Service"], Members: [{ MemberType: "Property", Name: "LocalPlayer", ValueType: { Name: "Player" } }] },
+    { Name: "Player", Superclass: "Instance", Members: [{ MemberType: "Property", Name: "Character", ValueType: { Name: "Model" } }] },
+    { Name: "Model", Superclass: "Instance", Members: [] },
     {
       Name: "Humanoid",
       Superclass: "Instance",
@@ -238,4 +253,46 @@ test("get_weekly_recap reads the pinned current recap, not the one before it", a
   const { text } = await call("get_weekly_recap", { list: true, limit: 5 });
   assert.match(text, /^2 Weekly Recaps[\s\S]*- Weekly Recap: September 21 - 25\n[\s\S]*September 14–20/);
   assert.doesNotMatch(text, /About the/);
+});
+
+test("check_api_health follows a dotted path the way Luau evaluates it", async () => {
+  const { text } = await call("check_api_health", {
+    members: [
+      "game.Players.LocalPlayer.Character",
+      "game.Players.LocalPlayer.Character.Humanoid",
+      "game.Players.LocalPlayer.Charcter",
+      "workspace.Map.Door.Touched",
+      "LoadLibrary",
+      "game.Lighting.ClockTime",
+      "script.Parent.Touched",
+    ],
+  });
+  // Only the last two segments used to be read: "no class LocalPlayer".
+  assert.match(lineFor(text, "game.Players.LocalPlayer.Character"), /^OK .*Character: Model/);
+  assert.match(lineFor(text, "game.Players.LocalPlayer.Character.Humanoid"), /^OK .*child named "Humanoid"/);
+  assert.match(lineFor(text, "game.Players.LocalPlayer.Charcter"), /^NOT FOUND .*Player has no member "Charcter"/);
+  assert.match(lineFor(text, "workspace.Map.Door.Touched"), /^UNCHECKED .*"Map" is not a member of Workspace/);
+  // The deprecated lower-case `lighting` property is typed Instance; the service is Lighting.
+  assert.match(lineFor(text, "game.Lighting.ClockTime"), /^OK .*ClockTime: float/);
+  // Parent can be any class, so "Instance has no member Touched" was a false alarm.
+  assert.match(lineFor(text, "script.Parent.Touched"), /^UNCHECKED .*"Parent" is typed Instance/);
+  assert.match(lineFor(text, "LoadLibrary"), /^NOT FOUND .*no class, enum, datatype, library or global named "LoadLibrary"/);
+});
+
+test("get_thread shows the reply a link points at", async () => {
+  clearCache();
+  const post = (n) => ({ id: 3000 + n, post_number: n, username: `u${n}`, cooked: `<p>post ${n}</p>` });
+  forum = (url) =>
+    url.includes("/posts/by_number/77/33.json")
+      ? json200({ ...post(33), cooked: "<p>the linked reply</p>" })
+      : url.includes("/t/77.json")
+        ? json200({
+            id: 77,
+            title: "Long thread",
+            posts_count: 40,
+            post_stream: { posts: Array.from({ length: 20 }, (_, i) => post(i + 1)), stream: Array.from({ length: 40 }, (_, i) => 3001 + i) },
+          })
+        : undefined;
+  const { text } = await call("get_thread", { topic: "https://devforum.roblox.com/t/long-thread/77/33", max_posts: 2 });
+  assert.match(text, /#1 by u1[\s\S]*#33 by u33[\s\S]*the linked reply/);
 });
