@@ -24,8 +24,8 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
-import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, orderMerged, rank, replyCount } from "../rank.js";
-import { ok, fail, toToolError, parsePostNumber, parseTopicId } from "./util.js";
+import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, orderMerged, postLikes, rank, replyCount } from "../rank.js";
+import { ok, fail, toToolError, parsePostNumber, parseTopicId, READ_ONLY, type ToolResult } from "./util.js";
 
 /**
  * A plain string, not an enum: the ids and the tree come from the forum at runtime, so a
@@ -49,8 +49,6 @@ async function resolveSlug(
   };
 }
 
-const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
-
 /**
  * Every search result line ends with "(topic_id: 3665478)", so a model reading one reaches
  * for `topic_id` — and used to get a validation error from the tool that printed it. Both
@@ -62,9 +60,20 @@ const topicSchema = z
   .describe("Topic id (e.g. 3665478) or DevForum URL. Also accepted as topic_id.");
 const topicAlias = z.union([z.number().int(), z.string()]).optional().describe("Alias for topic.");
 
-/** The topic a call names, under either spelling. */
-function topicArg(args: { topic?: number | string; topic_id?: number | string }): number | string | undefined {
-  return args.topic ?? args.topic_id;
+/** The topic a call names, under either spelling, or the error to return when it names none. */
+function topicArg(
+  args: { topic?: number | string; topic_id?: number | string },
+): { asked: number | string; topicId: number } | { error: ToolResult } {
+  const asked = args.topic ?? args.topic_id;
+  const topicId = parseTopicId(asked);
+  if (asked !== undefined && topicId !== undefined) return { asked, topicId };
+  return {
+    error: fail(
+      asked === undefined
+        ? "Pass the thread as topic (a topic id or a DevForum URL); topic_id is accepted too."
+        : `Could not read a topic id from "${asked}".`,
+    ),
+  };
 }
 
 function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: string[]): string {
@@ -183,7 +192,7 @@ function renderPost(post: RawPost, topic: RawTopic, budget: number): string {
   const badge = authorBadge(post);
   const role = badge ? ` (${badge})` : "";
   const accepted = post.accepted_answer ? " ✅ ACCEPTED ANSWER" : "";
-  const likes = post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
+  const likes = postLikes(post);
   const header = `--- #${post.post_number} by ${author}${role}${accepted} · ${relativeDate(post.created_at)}${likes ? ` · ${plural(likes, "like")}` : ""}`;
   const body = htmlToMarkdown(post.cooked ?? "", { keepQuotes: post.post_number === 1 });
   const url = topicUrl(topic.id, topic.slug, post.post_number);
@@ -227,12 +236,6 @@ function skippedNote(failed: string[]): string {
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
 
 /**
- * Discourse ANDs every term, so a natural symptom sentence can match nothing at all while
- * its two distinctive words find the report you wanted: "ProximityPrompt not triggering on
- * mobile" returned zero bug reports, "ProximityPrompt mobile" returned the staff-answered
- * OnePerButton one. Used only after a search comes back empty.
- */
-/**
  * The filters a call actually set, named. An empty result has to say which filter to loosen:
  * "drop the filters" leaves the caller guessing which of four it was.
  */
@@ -252,6 +255,12 @@ export function activeFilters(args: {
   ].filter(Boolean);
 }
 
+/**
+ * Discourse ANDs every term, so a natural symptom sentence can match nothing at all while
+ * its two distinctive words find the report you wanted: "ProximityPrompt not triggering on
+ * mobile" returned zero bug reports, "ProximityPrompt mobile" returned the staff-answered
+ * OnePerButton one. Used only after a search comes back empty.
+ */
 export function broaden(query: string): string | undefined {
   const words = query
     .split(/\s+/)
@@ -265,6 +274,20 @@ export function broaden(query: string): string | undefined {
 }
 
 /**
+ * An `after` date still to come matches nothing, and is almost always a mistyped year. It
+ * was sent anyway: search_bugs ran the filtered search, then an unfiltered one across every
+ * bug category to explain the empty result — 28 seconds, on a slow index, to report what the
+ * date alone already said.
+ */
+export function futureDate(after: string | undefined): string | undefined {
+  if (after === undefined) return undefined;
+  const at = Date.parse(`${after}T00:00:00Z`);
+  if (Number.isNaN(at)) return `"${after}" is not a real date — use YYYY-MM-DD.`;
+  const today = new Date().toISOString().slice(0, 10);
+  return after > today ? `after ${after} is in the future, so nothing can match it (today is ${today}). Check the year.` : undefined;
+}
+
+/**
  * The min_likes floor, applied to the posts the search returned. Discourse's own
  * `min_post_likes:` is not sent at all: see buildSearchQuery.
  */
@@ -273,7 +296,7 @@ function applyMinLikes(topics: RawTopic[], posts: RawPost[], minLikes: number | 
   const best = new Map<number, number>();
   for (const post of posts) {
     if (post.topic_id === undefined) continue;
-    const likes = post.like_count ?? post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
+    const likes = postLikes(post);
     best.set(post.topic_id, Math.max(best.get(post.topic_id) ?? 0, likes));
   }
   return topics.filter((t) => Math.max(t.like_count ?? 0, best.get(t.id) ?? 0) >= minLikes);
@@ -301,6 +324,8 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        const future = futureDate(args.after);
+        if (future) return fail(future);
         const category = await resolveSlug(args.category);
         if (category.error) return fail(category.error);
         const queries = asList(args.query);
@@ -361,6 +386,8 @@ export function registerForumTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        const future = futureDate(args.after);
+        if (future) return fail(future);
         const area = await resolveSlug(args.area);
         if (area.error) return fail(area.error);
         // area:"scripting-support" was accepted and searched, and the results came back under
@@ -462,15 +489,9 @@ export function registerForumTools(server: McpServer): void {
       annotations: READ_ONLY,
     },
     async (args) => {
-      const asked = topicArg(args);
-      const topicId = parseTopicId(asked);
-      if (topicId === undefined) {
-        return fail(
-          asked === undefined
-            ? "Pass the thread as topic (a topic id or a DevForum URL); topic_id is accepted too."
-            : `Could not read a topic id from "${asked}".`,
-        );
-      }
+      const ref = topicArg(args);
+      if ("error" in ref) return ref.error;
+      const { asked, topicId } = ref;
       try {
         const topic = await getTopic(topicId);
         const all = topic.post_stream?.posts ?? [];
@@ -501,9 +522,8 @@ export function registerForumTools(server: McpServer): void {
         const rest = all
           .filter((p) => p !== first && p !== accepted && p !== linked && !isAutomated(p))
           .sort((a, b) => {
-            const likes = (p: RawPost) => p.actions_summary?.find((x) => x.id === 2)?.count ?? 0;
             const staff = (p: RawPost) => (isRobloxStaff(p) ? 1 : 0);
-            return staff(b) - staff(a) || likes(b) - likes(a) || a.post_number - b.post_number;
+            return staff(b) - staff(a) || postLikes(b) - postLikes(a) || a.post_number - b.post_number;
           });
 
         const chosen = [...new Set([first, linked, accepted, ...rest])]
@@ -578,15 +598,9 @@ export function registerForumTools(server: McpServer): void {
       annotations: READ_ONLY,
     },
     async (args) => {
-      const asked = topicArg(args);
-      const topicId = parseTopicId(asked);
-      if (topicId === undefined) {
-        return fail(
-          asked === undefined
-            ? "Pass the thread as topic (a topic id or a DevForum URL); topic_id is accepted too."
-            : `Could not read a topic id from "${asked}".`,
-        );
-      }
+      const ref = topicArg(args);
+      if ("error" in ref) return ref.error;
+      const { topicId } = ref;
       try {
         const topic = await getTopic(topicId);
         const stream = topic.post_stream?.stream ?? [];

@@ -32,9 +32,7 @@ import {
   type DocMember,
 } from "../docs.js";
 import { truncate } from "../format.js";
-import { ok, fail, toToolError } from "./util.js";
-
-const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
+import { ok, fail, toToolError, READ_ONLY } from "./util.js";
 
 /**
  * Narrow a datatype reference page to one member, the way the class path narrows to one

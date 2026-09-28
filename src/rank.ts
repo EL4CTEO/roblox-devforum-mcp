@@ -16,7 +16,12 @@ const DEAD_TAGS = new Set(["cannot-reproduce", "duplicate", "not-a-bug", "invali
  * present on category listings — so the matched post's own count is the fallback.
  */
 export function likesOf(topic: RawTopic, post?: RawPost): number {
-  return topic.like_count ?? post?.like_count ?? post?.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
+  return topic.like_count ?? (post ? postLikes(post) : 0);
+}
+
+/** Likes on one post. Search payloads carry `like_count`; topic payloads only the action tally (id 2 is "like"). */
+export function postLikes(post: RawPost): number {
+  return post.like_count ?? post.actions_summary?.find((a) => a.id === 2)?.count ?? 0;
 }
 
 /**

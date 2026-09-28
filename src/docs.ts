@@ -475,7 +475,6 @@ export async function findEnum(name: string): Promise<ApiEnum | undefined> {
   return (await dumpIndex()).enumsByLower.get(name.toLowerCase());
 }
 
-/** Class names that look like the query, used when the exact lookup misses. */
 /**
  * Is `known` close enough to what was asked to be worth offering back? A bare substring test
  * is worthless on short names: "SomeClassThatDoesNotExist" contains "Hat", and that is the
@@ -502,6 +501,7 @@ export function nearestNames(target: string, known: Iterable<string>, limit = 6)
     .slice(0, limit);
 }
 
+/** Class names that look like the query, used when the exact lookup misses. */
 export async function suggestClasses(name: string, limit = 8): Promise<string[]> {
   const target = name.toLowerCase();
   return (await dumpIndex()).classNames

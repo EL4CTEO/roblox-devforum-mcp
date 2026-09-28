@@ -1083,3 +1083,12 @@ test("splitApiEntry reads a lookup by name mid-chain as the child it names", asy
   // At the end of the entry the call is the thing asked about, and is kept.
   assert.equal(splitApiEntry('game:GetService("Players")').raw, "DataModel.GetService");
 });
+
+test("an after date still to come is caught before any search runs", async () => {
+  const { futureDate } = await import("../dist/tools/forum.js");
+  assert.equal(futureDate(undefined), undefined);
+  assert.equal(futureDate("2024-01-01"), undefined);
+  assert.equal(futureDate(new Date().toISOString().slice(0, 10)), undefined, "today is allowed");
+  assert.match(futureDate("2999-01-01"), /in the future/);
+  assert.match(futureDate("2025-13-45"), /not a real date/);
+});

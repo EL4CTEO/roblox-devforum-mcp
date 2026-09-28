@@ -2,6 +2,9 @@
 
 import { HttpError, TimeoutError } from "../http.js";
 
+/** Every tool only reads public pages; none changes anything anywhere. */
+export const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
+
 export interface ToolResult {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;

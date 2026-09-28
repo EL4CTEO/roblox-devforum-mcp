@@ -10,9 +10,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { ok, toToolError } from "./util.js";
-
-const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
+import { ok, toToolError, READ_ONLY } from "./util.js";
 
 function withinDays(topic: RawTopic, days: number): boolean {
   const iso = topic.created_at ?? topic.bumped_at;
