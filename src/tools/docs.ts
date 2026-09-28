@@ -493,8 +493,17 @@ export function registerDocsTools(server: McpServer): void {
         // neighbouring tool prints cost DeepSeek three retries before it guessed "Humanoid",
         // so the member form resolves to its class and narrows to that member.
         const entry = splitApiEntry(args.name);
-        const looked = (await findClass(args.name)) ? args.name : entry.className;
-        const memberFilter = looked === args.name ? undefined : entry.memberName;
+        // The expression forms check_api_health accepts are walked the same way here, or the
+        // entry that tool just answered "OK game.Players.LocalPlayer.Character" is one this
+        // tool then refuses.
+        const segments = entry.raw.split(".").filter(Boolean);
+        const walked = segments.length > 2 && !entry.raw.startsWith("Enum.") ? await walkPath(segments) : undefined;
+        if (walked && "unresolved" in walked) {
+          return fail(`Cannot tell which class "${args.name}" reaches: "${walked.unresolved}" ${walked.why}. Look up that class directly, e.g. "Part".`);
+        }
+        const target = walked ?? entry;
+        const looked = (await findClass(args.name)) ? args.name : target.className;
+        const memberFilter = looked === args.name ? undefined : target.memberName;
 
         const cls = await findClass(looked);
         if (!cls) {
@@ -514,7 +523,20 @@ export function registerDocsTools(server: McpServer): void {
             (prefixed !== undefined || lower === undefined || namesItem || !(await findDatatype(entry.className)))
           ) {
             const items = (enumType.Items ?? []).map((i) => `${i.Name} = ${i.Value}`).join(", ");
-            return ok(`Enum.${enumType.Name}\n${items || "(no items)"}`);
+            // A named item is the question; the whole list only backs the answer up. It used to
+            // be the list alone, so "Enum.Material.Fake" read like a confirmation.
+            const itemName = prefixed ? /^Enum\.[A-Za-z0-9_]+\.([A-Za-z0-9_]+)/.exec(entry.raw)?.[1] : memberFilter;
+            let lead = "";
+            if (itemName !== undefined) {
+              const item = (enumType.Items ?? []).find((i) => i.Name === itemName);
+              const cased = (enumType.Items ?? []).find((i) => i.Name.toLowerCase() === itemName.toLowerCase());
+              lead = item
+                ? `Enum.${enumType.Name}.${item.Name} = ${item.Value}\n\n`
+                : cased
+                  ? `Enum.${enumType.Name} has no "${itemName}" — Luau is case-sensitive: write Enum.${enumType.Name}.${cased.Name} (= ${cased.Value}).\n\n`
+                  : `Enum.${enumType.Name} has no item "${itemName}".\n\n`;
+            }
+            return ok(truncate(`${lead}Enum.${enumType.Name}\n${items || "(no items)"}`, args.max_tokens, "the item list is cut"));
           }
           // Vector3, CFrame and UDim2 are datatypes, not classes, so the dump has no entry
           // and this answered "no engine class named Vector3. Did you mean Vector3Curve,

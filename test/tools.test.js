@@ -201,7 +201,13 @@ test("the enum shorthand gets the item and case checks the Enum. form gets", asy
 test("get_engine_api resolves the enum shorthand and a named member exactly", async () => {
   const shorthand = await call("get_engine_api", { name: "Material.Neon" });
   assert.equal(shorthand.isError, false, shorthand.text);
-  assert.match(shorthand.text, /^Enum\.Material\nNeon = 288/);
+  assert.match(shorthand.text, /^Enum\.Material\.Neon = 288\n\nEnum\.Material\nNeon = 288/);
+  const fake = await call("get_engine_api", { name: "Enum.Material.Fake" });
+  assert.match(fake.text, /^Enum\.Material has no item "Fake"/);
+  const cased = await call("get_engine_api", { name: "Enum.Material.neon" });
+  assert.match(cased.text, /write Enum\.Material\.Neon/);
+  const whole = await call("get_engine_api", { name: "Enum.Material" });
+  assert.match(whole.text, /^Enum\.Material\nNeon = 288/, "no item named, no lead line");
   const health = await call("get_engine_api", { name: "Humanoid.Health" });
   assert.match(health.text, /Health: float/);
   assert.doesNotMatch(health.text, /MaxHealth/, "a named member is matched whole, not as a substring");
@@ -277,6 +283,16 @@ test("check_api_health follows a dotted path the way Luau evaluates it", async (
   // Parent can be any class, so "Instance has no member Touched" was a false alarm.
   assert.match(lineFor(text, "script.Parent.Touched"), /^UNCHECKED .*"Parent" is typed Instance/);
   assert.match(lineFor(text, "LoadLibrary"), /^NOT FOUND .*no class, enum, datatype, library or global named "LoadLibrary"/);
+});
+
+test("get_engine_api walks the same expressions check_api_health does", async () => {
+  const walked = await call("get_engine_api", { name: "game.Players.LocalPlayer.Character" });
+  assert.equal(walked.isError, false, walked.text);
+  assert.match(walked.text, /^Player /);
+  assert.match(walked.text, /Character: Model/);
+  const opaque = await call("get_engine_api", { name: "script.Parent.Touched" });
+  assert.equal(opaque.isError, true);
+  assert.match(opaque.text, /"Parent" is typed Instance/);
 });
 
 test("get_thread shows the reply a link points at", async () => {
