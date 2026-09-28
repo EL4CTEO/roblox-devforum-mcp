@@ -1092,3 +1092,12 @@ test("an after date still to come is caught before any search runs", async () =>
   assert.match(futureDate("2999-01-01"), /in the future/);
   assert.match(futureDate("2025-13-45"), /not a real date/);
 });
+
+test("splitApiEntry reads a constructor mid-chain as the value it builds", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+  assert.deepEqual(splitApiEntry('Instance.new("Part").Anchored'), { raw: "Part.Anchored", className: "Part", memberName: "Anchored" });
+  assert.equal(splitApiEntry("CFrame.new(0, 5, 0).Position").raw, "CFrame.Position");
+  assert.equal(splitApiEntry("Color3.fromRGB(255, 0, 0):Lerp").raw, "Color3.Lerp");
+  // At the end of the entry the constructor is itself the question.
+  assert.equal(splitApiEntry('Instance.new("Part")').raw, "Instance.new");
+});

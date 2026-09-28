@@ -296,3 +296,24 @@ test("get_thread shows the reply a link points at", async () => {
   const { text } = await call("get_thread", { topic: "https://devforum.roblox.com/t/long-thread/77/33", max_posts: 2 });
   assert.match(text, /#1 by u1[\s\S]*#33 by u33[\s\S]*the linked reply/);
 });
+
+test("get_whats_new reports the sections that loaded when one listing fails", async () => {
+  clearCache();
+  const now = new Date().toISOString();
+  forum = (url) => {
+    if (url.includes("/release-notes/")) throw new TypeError("fetch failed");
+    if (url.includes("/tag/weekly-recap/")) {
+      return json200({ topic_list: { topics: [{ id: 3, title: "Weekly Recap: this week", created_at: now }] } });
+    }
+    if (url.includes("/t/3.json")) throw new TypeError("fetch failed"); // the body is optional too
+    if (url.includes("/announcements/")) {
+      return json200({ topic_list: { topics: [{ id: 9, title: "A new API", created_at: now }] } });
+    }
+    return undefined;
+  };
+  const { text, isError } = await call("get_whats_new", { days: 7 });
+  assert.equal(isError, false, text);
+  assert.match(text, /Weekly Recap: this week/);
+  assert.match(text, /A new API/);
+  assert.match(text, /release notes could not be loaded and is left out/);
+});

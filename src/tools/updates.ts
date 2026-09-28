@@ -169,19 +169,33 @@ export function registerUpdateTools(server: McpServer): void {
         // lands rather than after the slowest of the three listings — it used to be a fourth
         // round trip in series with the rest.
         const recapsP = listTopics("latest", undefined, WEEKLY_RECAP_TAG).then(newestFirst);
-        const bodyP = recapsP.then((list) =>
-          args.include_recap_body && list[0] ? getTopic(list[0].id) : undefined,
-        );
-        const [recaps, rawNotes, rawAnnouncements, recapTopic] = await Promise.all([
+        // The body is a bonus on top of the digest: a recap that fails to load leaves its link,
+        // and must not take the release notes and announcements down with it.
+        const bodyP = recapsP
+          .then((list) => (args.include_recap_body && list[0] ? getTopic(list[0].id) : undefined))
+          .catch(() => undefined);
+        // Each section is independent, so one listing timing out drops that section only;
+        // the call fails only when there is nothing at all to report.
+        const [recapsR, notesR, announcementsR] = await Promise.allSettled([
           recapsP,
           listTopics("latest", "release-notes"),
           listTopics("latest", "announcements"),
-          bodyP,
         ]);
+        const settled = [recapsR, notesR, announcementsR];
+        const failure = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (failure && settled.every((r) => r.status === "rejected")) throw failure.reason;
+        const value = (r: PromiseSettledResult<RawTopic[]>) => (r.status === "fulfilled" ? r.value : []);
+        const recapTopic = await bodyP;
         // Every section here answers "what shipped recently", so all three are ordered by
         // publication rather than by the replies a months-old thread is still collecting.
-        const notes = newestFirst(rawNotes);
-        const announcements = newestFirst(rawAnnouncements);
+        const recaps = value(recapsR);
+        const notes = newestFirst(value(notesR));
+        const announcements = newestFirst(value(announcementsR));
+        const missing = [
+          recapsR.status === "rejected" ? "the Weekly Recap" : "",
+          notesR.status === "rejected" ? "release notes" : "",
+          announcementsR.status === "rejected" ? "announcements" : "",
+        ].filter(Boolean);
 
         const sections: string[] = [];
 
@@ -210,13 +224,19 @@ export function registerUpdateTools(server: McpServer): void {
           sections.push(`## Announcements (last ${args.days} days)\n${recentAnnouncements.map(line).join("\n")}`);
         }
 
+        // Say what could not be loaded: "published nothing" would be a false claim about Roblox.
+        const gap = missing.length ? ` (${missing.join(" and ")} could not be loaded and ${missing.length === 1 ? "is" : "are"} left out)` : "";
         if (sections.length === 0) {
-          return ok(`Roblox published nothing in the last ${args.days} days. Try a longer window.`);
+          return ok(
+            missing.length
+              ? `Nothing to report in the last ${args.days} days${gap}. Retry shortly.`
+              : `Roblox published nothing in the last ${args.days} days. Try a longer window.`,
+          );
         }
 
         // The footer is part of what the caller receives, so it comes out of the same
         // budget rather than being appended past it.
-        const footer = "\n\nUse get_thread on any topic_id above to read the full post.";
+        const footer = `\n\nUse get_thread on any topic_id above to read the full post.${gap ? `\n${gap.trim()}` : ""}`;
         const budget = Math.max(args.max_tokens - Math.ceil(footer.length / 4), 100);
         return ok(truncate(sections.join("\n\n"), budget, "lower `days` or `limit`") + footer);
       } catch (err) {

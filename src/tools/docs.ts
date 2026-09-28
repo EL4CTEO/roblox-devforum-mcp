@@ -74,6 +74,11 @@ function filterDatatypeMembers(page: string, memberName: string): string {
 export function splitApiEntry(entry: string): { raw: string; className: string; memberName?: string } {
   const raw = entry
     .trim()
+    // A constructor mid-chain is the value it builds: Instance.new("Part").Anchored asks
+    // about Part.Anchored, CFrame.new().Position about CFrame's Position. Both used to be
+    // answered as the constructor, and the member after it never checked.
+    .replace(/^Instance\.new\(\s*["']([A-Za-z0-9_]+)["'][^)]*\)(?=[.:])/, "$1")
+    .replace(/^([A-Za-z0-9_]+)\.(?:new|from[A-Za-z0-9_]*)\([^()]*\)(?=[.:])/, "$1")
     .replace(
       /[:.](?:GetService|WaitForChild|FindFirstChild|FindFirstChildOfClass|FindFirstChildWhichIsA)\(\s*["']([A-Za-z0-9_]+)["'][^)]*\)(?=[.:])/g,
       ".$1",
@@ -109,6 +114,7 @@ const STATE = {
   missing: "NOT FOUND ",
   wrongCase: "WRONG CASE",
   unchecked: "UNCHECKED ",
+  unknown: "UNKNOWN   ",
 } as const;
 
 type Walked = { className: string; memberName: string } | { unresolved: string; why: string };
@@ -302,7 +308,7 @@ async function checkEntry(entry: string): Promise<string> {
     if (cls.Tags?.includes("Deprecated")) {
       state = STATE.deprecated;
       const note = await deprecationNote(cls.Name);
-      if (note) notes.push(note);
+      if (note) notes.push(note.replace(/\.\s*$/, "")); // the notes are joined with "; "
     }
     if (cls.Tags?.includes("NotCreatable")) notes.push("not creatable with Instance.new");
     if (cls.Tags?.includes("Service")) notes.push("get it via game:GetService");
@@ -344,7 +350,7 @@ async function checkEntry(entry: string): Promise<string> {
   if (member.Tags?.includes("Deprecated")) {
     state = STATE.deprecated;
     const note = await deprecationNote(owner.Name, member.Name);
-    if (note) notes.push(note);
+    if (note) notes.push(note.replace(/\.\s*$/, "")); // the notes are joined with "; "
   }
   const security = securityOf(member);
   if (security) {
@@ -428,7 +434,7 @@ export function registerDocsTools(server: McpServer): void {
           .array(z.string().min(2))
           .min(1)
           .max(25)
-          .describe("Entries to check: \"ClassName\" or \"ClassName.MemberName\", e.g. [\"BodyVelocity\", \"Humanoid.MoveTo\"]."),
+          .describe("Entries to check: \"ClassName\", \"ClassName.MemberName\", or an expression copied from code, e.g. [\"BodyVelocity\", \"Humanoid.MoveTo\", \"game.Players.LocalPlayer.Character\", \"Instance.new(\\\"Part\\\").Anchored\"]."),
         max_tokens: z.number().int().min(300).max(12000).default(2500),
       },
       annotations: READ_ONLY,
@@ -438,10 +444,10 @@ export function registerDocsTools(server: McpServer): void {
         // One entry failing to load — a docs page that 404s, a timeout — used to fail the whole
         // batch, throwing away the answers that had worked. It is reported on its own line.
         const lines = await Promise.all(
-          args.members.map((entry) =>
+          args.members.map((raw) => raw.trim()).map((entry) =>
             checkEntry(entry).catch(
               (err: unknown) =>
-                `UNKNOWN    ${entry} — could not be checked: ${err instanceof Error ? err.message : String(err)}`,
+                `${STATE.unknown} ${entry} — could not be checked: ${err instanceof Error ? err.message : String(err)}`,
             ),
           ),
         );
