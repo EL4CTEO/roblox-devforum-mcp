@@ -536,6 +536,11 @@ export function registerDocsTools(server: McpServer): void {
                   ? `Enum.${enumType.Name} has no "${itemName}" — Luau is case-sensitive: write Enum.${enumType.Name}.${cased.Name} (= ${cased.Value}).\n\n`
                   : `Enum.${enumType.Name} has no item "${itemName}".\n\n`;
             }
+            // An item that exists is answered in one line; the other few hundred values of
+            // Enum.KeyCode only cost the caller tokens. A miss keeps the list to pick from.
+            if (itemName !== undefined && (enumType.Items ?? []).some((i) => i.Name === itemName)) {
+              return ok(`${lead}Enum.${enumType.Name} has ${enumType.Items?.length ?? 0} items — call get_engine_api with "${enumType.Name}" to list them.`);
+            }
             return ok(truncate(`${lead}Enum.${enumType.Name}\n${items || "(no items)"}`, args.max_tokens, "the item list is cut"));
           }
           // Vector3, CFrame and UDim2 are datatypes, not classes, so the dump has no entry

@@ -266,6 +266,34 @@ const FAMILY: Readonly<Record<string, string>> = {
   resources: "resources",
 };
 
+/** Levenshtein distance, giving up (returning limit + 1) once it must exceed `limit`. */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      row[j] = Math.min(
+        (prev[j] ?? 0) + 1,
+        (row[j - 1] ?? 0) + 1,
+        (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = row;
+  }
+  return prev[b.length] ?? limit + 1;
+}
+
+/** Slugs within `budget` edits of what was asked, nearest only. */
+function closestBySpelling(asked: string, limit: number, budget: number): string[] {
+  const near = knownSlugs()
+    .map((known) => ({ known, distance: editDistance(asked, known, budget) }))
+    .filter((c) => c.distance <= budget)
+    .sort((x, y) => x.distance - y.distance);
+  const best = near[0]?.distance;
+  return near.filter((c) => c.distance === best).slice(0, limit).map((c) => c.known);
+}
+
 /**
  * Slugs close enough to be what the caller meant. Discourse slugs are dash-joined words, so
  * a shared whole word ("scripting", "studio") is the signal worth reporting back.
@@ -278,6 +306,10 @@ export function suggestCategories(slug: string, limit = 3): string[] {
   const asked = slug.trim().toLowerCase();
   const words = asked.split(/[^a-z0-9]+/).filter(Boolean);
   if (words.length === 0) return [];
+
+  // One slip from a real slug ("engine-bug") is a clearer answer than every slug sharing a word.
+  const slip = closestBySpelling(asked, limit, 1);
+  if (slip.length > 0) return slip;
 
   // Only a distinctive word counts. Half the tree ends in "bugs", so matching on that alone
   // is noise: "physics-bugs" came back "did you mean xbox-bugs, other-bugs, forum-bugs?" —
@@ -304,6 +336,11 @@ export function suggestCategories(slug: string, limit = 3): string[] {
       .slice(0, limit)
       .map((s) => s.known);
   }
+
+  // A misspelling shares no whole word with any slug ("scriptng-support"), so it scored
+  // nothing and fell through to the family, which named the parent.
+  const loose = closestBySpelling(asked, limit, Math.max(1, Math.floor(asked.length / 6)));
+  if (loose.length > 0) return loose;
 
   // Nothing distinctive matched, so name the family the caller was plainly aiming at
   // instead of siblings that merely end the same way.

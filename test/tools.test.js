@@ -201,7 +201,7 @@ test("the enum shorthand gets the item and case checks the Enum. form gets", asy
 test("get_engine_api resolves the enum shorthand and a named member exactly", async () => {
   const shorthand = await call("get_engine_api", { name: "Material.Neon" });
   assert.equal(shorthand.isError, false, shorthand.text);
-  assert.match(shorthand.text, /^Enum\.Material\.Neon = 288\n\nEnum\.Material\nNeon = 288/);
+  assert.match(shorthand.text, /^Enum\.Material\.Neon = 288\n\nEnum\.Material has \d+ items/, "a found item is answered without the whole list");
   const fake = await call("get_engine_api", { name: "Enum.Material.Fake" });
   assert.match(fake.text, /^Enum\.Material has no item "Fake"/);
   const cased = await call("get_engine_api", { name: "Enum.Material.neon" });

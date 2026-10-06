@@ -114,8 +114,14 @@ function topicLine(index: number, topic: RawTopic, post?: RawPost, matchedBy?: s
     .join("\n");
 }
 
-/** Discourse's bot posts ("This topic was automatically closed…") never help a debugging agent. */
+/**
+ * Posts with nothing a debugging agent can use: Discourse's bot notices ("This topic was
+ * automatically closed…") and small actions such as a staff member pinning the topic, which
+ * carry no text and used to be served as a blank "#2 by Bluff_006 (Roblox staff)" reply.
+ */
 export function isAutomated(post: RawPost): boolean {
+  if (post.post_type === 3) return true;
+  if (post.cooked !== undefined && post.cooked.trim() === "") return true;
   if (post.username !== "system") return false;
   // "opened" was missing, so "This topic was automatically opened after 10 minutes" survived
   // into staff threads and read as a reply. Match the whole family instead of two verbs.
@@ -666,7 +672,12 @@ export function registerForumTools(server: McpServer): void {
         const category = await resolveSlug(args.category);
         if (category.error) return fail(category.error);
         const topics = await listTopics(args.listing, category.slug as CategorySlug | undefined, args.tag, args.period);
-        if (topics.length === 0) return ok("No topics found for that category or tag.");
+        if (topics.length === 0) {
+          // An empty week is a real answer for a small tag, and "top" is the only listing that
+          // can run dry like that; say which knob widens it.
+          const widen = args.listing === "top" && args.period !== "all" ? ` Nothing ranked in the ${args.period} period — try a longer period.` : "";
+          return ok(`No topics found for that category or tag.${widen}`);
+        }
         const chosen = topics.slice(0, args.limit);
         const scope =
           [category.slug ? `#${category.slug}` : "", args.tag ? `tag:${args.tag}` : ""].filter(Boolean).join(" ") ||

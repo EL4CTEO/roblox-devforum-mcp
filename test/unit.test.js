@@ -312,12 +312,18 @@ test("cachedJson round-trips and reuses a fresh entry", async () => {
   assert.deepEqual(await cachedJson(key, 60_000, load), { value: 1 });
   assert.deepEqual(await cachedJson(key, 60_000, load), { value: 1 }, "second call should hit disk");
   assert.equal(calls, 1);
-  assert.deepEqual(await cachedJson(key, -1, load), { value: 2 }, "expired entry should reload");
 
-  const { rm } = await import("node:fs/promises");
+  const { rm, utimes } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  await rm(join(tmpdir(), "roblox-devforum-mcp", `${key}.json`), { force: true });
+  const file = join(tmpdir(), "roblox-devforum-mcp", `${key}.json`);
+  const old = new Date(Date.now() - 2 * 3_600_000);
+  await utimes(file, old, old);
+  assert.deepEqual(await cachedJson(key, 60_000, load), { value: 2 }, "expired entry should reload");
+  const future = new Date(Date.now() + 3_600_000);
+  await utimes(file, future, future);
+  assert.deepEqual(await cachedJson(key, 60_000, load), { value: 3 }, "a far-future stamp is not fresh");
+  await rm(file, { force: true });
 });
 
 test("mergeResults dedupes and promotes topics found by several phrasings", async () => {
@@ -1100,4 +1106,18 @@ test("splitApiEntry reads a constructor mid-chain as the value it builds", async
   assert.equal(splitApiEntry("Color3.fromRGB(255, 0, 0):Lerp").raw, "Color3.Lerp");
   // At the end of the entry the constructor is itself the question.
   assert.equal(splitApiEntry('Instance.new("Part")').raw, "Instance.new");
+});
+
+test("a topic's small actions and empty posts are not served as replies", async () => {
+  const { isAutomated } = await import("../dist/tools/forum.js");
+  assert.equal(isAutomated({ username: "staff", post_type: 3, cooked: "" }), true);
+  assert.equal(isAutomated({ username: "staff", post_type: 1, cooked: "  " }), true);
+  assert.equal(isAutomated({ username: "staff", post_type: 1, cooked: "<p>Fixed.</p>" }), false);
+});
+
+test("suggestCategories fixes a one-letter slip before matching by word", async () => {
+  const { suggestCategories, warmCategories } = await import("../dist/categories.js");
+  await warmCategories?.();
+  assert.deepEqual(suggestCategories("scriptng-support"), ["scripting-support"]);
+  assert.deepEqual(suggestCategories("engine-bug"), ["engine-bugs"]);
 });

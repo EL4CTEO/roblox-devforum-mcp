@@ -64,6 +64,8 @@ export interface RawPost {
   id: number;
   post_number: number;
   topic_id?: number;
+  /** 1 regular, 2 moderator action, 3 small action ("pinned this topic"), 4 whisper. */
+  post_type?: number;
   username?: string;
   name?: string;
   created_at?: string;
@@ -298,5 +300,5 @@ export async function listTags(): Promise<Array<{ name: string; count: number }>
     `${BASE_URL}/tags.json`,
     TTL.static,
   );
-  return (data.tags ?? []).sort((a, b) => b.count - a.count);
+  return [...(data.tags ?? [])].sort((a, b) => b.count - a.count);
 }

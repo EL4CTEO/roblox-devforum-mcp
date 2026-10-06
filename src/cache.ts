@@ -17,7 +17,11 @@ export async function cachedJson<T>(name: string, maxAgeMs: number, load: () => 
   try {
     const info = await stat(file);
     const cached = JSON.parse(await readFile(file, "utf8")) as T;
-    if (Date.now() - info.mtimeMs < maxAgeMs) return cached;
+    // A file stamped well in the future (a restored backup, a clock set back) would stay
+    // "fresh" until the clock caught up. A few seconds of skew is normal: filesystems round
+    // timestamps up, so a file written this instant can read as slightly ahead of Date.now().
+    const age = Date.now() - info.mtimeMs;
+    if (age >= -5_000 && age < maxAgeMs) return cached;
     stale = cached;
   } catch {
     /* missing or unreadable — fall through to the loader */
