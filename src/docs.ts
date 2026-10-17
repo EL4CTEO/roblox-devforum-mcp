@@ -385,7 +385,14 @@ export async function searchDocs(query: string, limit: number): Promise<DocHit[]
  * "create.roblox.com/docs/../../README" URL, which is not a page an agent should be citing.
  */
 export function resolveDocPath(path: string): string {
-  const clean = path.trim().replace(/^\/+/, "");
+  // The URL parser reads "%2e%2e" as ".." and "\" as "/", so "%2e%2e/%2e%2e/README.md" and
+  // "..\..\README.md" passed the check below as ordinary names and still walked out of the
+  // tree once fetched. Both are put in the form the parser will see before resolving.
+  const clean = path
+    .trim()
+    .replace(/%2e/gi, ".")
+    .replace(/%2f|%5c|\\/gi, "/")
+    .replace(/^\/+/, "");
   const full = clean.startsWith(DOCS_ROOT) ? clean : `${DOCS_ROOT}${clean}`;
   const parts: string[] = [];
   for (const segment of full.split("/")) {

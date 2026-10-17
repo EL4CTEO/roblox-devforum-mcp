@@ -10,11 +10,17 @@ function codePoint(whole: string, value: number): string {
   return Number.isInteger(value) && value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : whole;
 }
 
+/**
+ * One pass over every kind of reference. Three passes in a row decoded twice: "&#38;lt;" is a
+ * post that literally says "&lt;", but the numeric pass made it "&lt;" and the named pass
+ * then made that "<".
+ */
 export function decodeEntities(input: string): string {
-  return input
-    .replace(/&#x([0-9a-f]+);/gi, (m, h: string) => codePoint(m, parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (m, d: string) => codePoint(m, Number(d)))
-    .replace(/&([a-z]+);/gi, (m, n: string) => NAMED[n.toLowerCase()] ?? m);
+  return input.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi, (m, hex?: string, dec?: string, name?: string) => {
+    if (hex !== undefined) return codePoint(m, parseInt(hex, 16));
+    if (dec !== undefined) return codePoint(m, Number(dec));
+    return NAMED[(name ?? "").toLowerCase()] ?? m;
+  });
 }
 
 /**
@@ -131,7 +137,11 @@ export function truncate(text: string, maxTokens: number, hint = ""): string {
   const cut = text.slice(0, maxChars);
   const boundary = Math.max(cut.lastIndexOf("\n\n"), cut.lastIndexOf(". "));
   const kept = boundary > maxChars * 0.5 ? cut.slice(0, boundary) : cut;
-  return `${kept.trimEnd()}\n\n…[truncated${hint ? `, ${hint}` : ""}]`;
+  // A cut inside a code block left its fence open, so the truncation notice — and, in a
+  // multi-post reply, every post after it — rendered as part of the code.
+  const fences = kept.match(/^```/gm)?.length ?? 0;
+  const close = fences % 2 === 1 ? "\n```" : "";
+  return `${kept.trimEnd()}${close}\n\n…[truncated${hint ? `, ${hint}` : ""}]`;
 }
 
 /** Start of the UTC day holding `ms`. Forum timestamps are UTC, so the comparison is too. */

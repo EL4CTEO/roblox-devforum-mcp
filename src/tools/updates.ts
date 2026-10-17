@@ -10,7 +10,7 @@ import {
   type RawTopic,
 } from "../discourse.js";
 import { htmlToMarkdown, relativeDate, truncate } from "../format.js";
-import { ok, toToolError, READ_ONLY } from "./util.js";
+import { fail, isRealDate, ok, toToolError, READ_ONLY } from "./util.js";
 
 function withinDays(topic: RawTopic, days: number): boolean {
   const iso = topic.created_at ?? topic.bumped_at;
@@ -101,6 +101,11 @@ export function registerUpdateTools(server: McpServer): void {
       annotations: READ_ONLY,
     },
     async (args) => {
+      // An impossible date parsed to NaN, matched no recap, and was answered "no recap
+      // published on or before 2026-13-45 — try a later date".
+      if (args.before !== undefined && !isRealDate(args.before)) {
+        return fail(`"${args.before}" is not a real date — use YYYY-MM-DD.`);
+      }
       try {
         const needed = args.list ? args.limit : args.before ? 90 : args.week + 1;
         const archive = await recapArchive(needed);

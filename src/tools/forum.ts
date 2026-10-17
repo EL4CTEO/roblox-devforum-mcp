@@ -25,7 +25,7 @@ import {
 } from "../discourse.js";
 import { decodeEntities, htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
 import { bugStatus, FILLER, likesOf, mergeResults, onTopicOnly, orderMerged, postLikes, rank, replyCount } from "../rank.js";
-import { ok, fail, toToolError, parsePostNumber, parseTopicId, READ_ONLY, type ToolResult } from "./util.js";
+import { ok, fail, toToolError, isRealDate, parsePostNumber, parseTopicId, READ_ONLY, type ToolResult } from "./util.js";
 
 /**
  * A plain string, not an enum: the ids and the tree come from the forum at runtime, so a
@@ -287,8 +287,7 @@ export function broaden(query: string): string | undefined {
  */
 export function futureDate(after: string | undefined): string | undefined {
   if (after === undefined) return undefined;
-  const at = Date.parse(`${after}T00:00:00Z`);
-  if (Number.isNaN(at)) return `"${after}" is not a real date — use YYYY-MM-DD.`;
+  if (!isRealDate(after)) return `"${after}" is not a real date — use YYYY-MM-DD.`;
   const today = new Date().toISOString().slice(0, 10);
   return after > today ? `after ${after} is in the future, so nothing can match it (today is ${today}). Check the year.` : undefined;
 }

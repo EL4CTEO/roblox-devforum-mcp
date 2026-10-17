@@ -1,6 +1,14 @@
 /** Small helpers shared by the tool implementations. */
 
-import { HttpError, TimeoutError } from "../http.js";
+import { BASE_URL, HttpError, TimeoutError } from "../http.js";
+
+function isForum(url: string): boolean {
+  try {
+    return new URL(url).host === new URL(BASE_URL).host;
+  } catch {
+    return false;
+  }
+}
 
 /** Every tool only reads public pages; none changes anything anywhere. */
 export const READ_ONLY = { readOnlyHint: true, openWorldHint: true, destructiveHint: false } as const;
@@ -19,6 +27,16 @@ export function fail(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
+/**
+ * A YYYY-MM-DD string that names a day on the calendar. The schema regex lets "2026-13-45"
+ * through, and Date.parse rolls "2026-02-31" over to 3 March instead of rejecting it, so the
+ * date is checked by printing it back.
+ */
+export function isRealDate(date: string): boolean {
+  const at = Date.parse(`${date}T00:00:00Z`);
+  return !Number.isNaN(at) && new Date(at).toISOString().slice(0, 10) === date;
+}
+
 /** Turn any thrown value into a readable, non-fatal tool error. */
 export function toToolError(context: string, err: unknown): ToolResult {
   // A timeout is the one failure the caller can act on, and the DevForum's search index is
@@ -31,6 +49,12 @@ export function toToolError(context: string, err: unknown): ToolResult {
   }
   if (err instanceof HttpError) {
     if (err.status === 404) return fail(`${context}: not found (404). Check the id or path.`);
+    // GitHub answers a spent rate limit with 403, but the forum answers 403 for a topic in a
+    // category anonymous readers cannot see. Calling that "rate limited, retry shortly" sent
+    // the caller back for the same refusal.
+    if (err.status === 403 && isForum(err.url)) {
+      return fail(`${context}: the DevForum refused access (403) — it is private or restricted to signed-in members. Pick another thread.`);
+    }
     if (err.status === 403 || err.status === 429) {
       return fail(`${context}: rate limited by the upstream service (${err.status}). Retry shortly.`);
     }
@@ -50,7 +74,8 @@ export function toToolError(context: string, err: unknown): ToolResult {
  */
 function parseTopicRef(input: string | number | undefined): { id?: number; post?: number } {
   if (input === undefined) return {};
-  if (typeof input === "number") return Number.isInteger(input) ? { id: input } : {};
+  // Topic ids start at 1; 0 or -5 used to be sent to the forum and came back a bare 404.
+  if (typeof input === "number") return Number.isInteger(input) && input > 0 ? { id: input } : {};
   const trimmed = input.trim().replace(/[?#].*$/, "");
   const at = trimmed.indexOf("/t/");
   const path = at >= 0 ? trimmed.slice(at + 3) : trimmed;
@@ -58,7 +83,7 @@ function parseTopicRef(input: string | number | undefined): { id?: number; post?
   const numeric = (s: string | undefined) => (s !== undefined && /^\d+$/.test(s) ? Number(s) : undefined);
   const start = numeric(segments[0]) !== undefined ? 0 : 1;
   const id = numeric(segments[start]);
-  if (id === undefined) return {};
+  if (id === undefined || id === 0) return {};
   const post = numeric(segments[start + 1]);
   return post === undefined ? { id } : { id, post };
 }

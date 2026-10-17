@@ -86,6 +86,10 @@ export function splitApiEntry(entry: string): { raw: string; className: string; 
     .replace(/\(.*$/, "")
     .replace(/:/g, ".")
     .replace(/^\.+|\.+$/g, "")
+    // "RunService.Heartbeat:Connect" asks about Heartbeat: Connect, Once and Wait belong to
+    // every event's RBXScriptSignal, not to the class. The walk used to stop at Heartbeat as
+    // "a child the game names itself" and leave the most common line in Luau unchecked.
+    .replace(/^(.+\..+)\.(?:Connect|ConnectParallel|Once|Wait)$/, "$1")
     .replace(/^game(?=\.|$)/i, "DataModel");
   const segments = raw.split(".").filter(Boolean);
   const memberName = segments.length > 1 ? segments[segments.length - 1] : undefined;
@@ -148,7 +152,14 @@ async function walkPath(segments: string[]): Promise<Walked | undefined> {
     const found = await resolveMember(current, segment);
     const property = found?.exact && found.member.MemberType === "Property" ? found.member : undefined;
     if (!property) {
-      return { unresolved: segment, why: `is not a member of ${current}, so it is a child the game names itself` };
+      // A method or event in the middle of a path is not "a child the game names itself".
+      const kind = found?.exact ? found.member.MemberType.toLowerCase() : undefined;
+      return {
+        unresolved: segment,
+        why: kind
+          ? `is a ${kind} of ${current}, not a property, so nothing can be indexed on it`
+          : `is not a member of ${current}, so it is a child the game names itself`,
+      };
     }
     const typed = property.ValueType?.Name;
     const next = typed === undefined || typed === "Instance" ? undefined : await findClass(typed);

@@ -239,12 +239,15 @@ async function request<T>(
         // actually said. It used to fall through to a TimeoutError, and a 429 read "the
         // request timed out — drop a filter", which sends the caller after the wrong fix.
         lastError = new HttpError(res.status, url);
+        // A Retry-After past the deadline is a wait that ends in giving up anyway, so the
+        // answer the forum already gave is reported now rather than up to ten seconds later.
         const retryAfter = Number(res.headers.get("retry-after"));
-        await sleep(
+        const wait =
           Number.isFinite(retryAfter) && retryAfter > 0
             ? Math.min(retryAfter * 1000, 10_000)
-            : 400 * 2 ** attempt + Math.random() * 250,
-        );
+            : 400 * 2 ** attempt + Math.random() * 250;
+        if (Date.now() - started + wait >= DEADLINE_MS) throw lastError;
+        await sleep(wait);
       } catch (err) {
         // A body that is not JSON (a maintenance page served with 200) will not parse on the
         // next attempt either, so it is reported straight away rather than retried.

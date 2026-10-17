@@ -1121,3 +1121,50 @@ test("suggestCategories fixes a one-letter slip before matching by word", async 
   assert.deepEqual(suggestCategories("scriptng-support"), ["scripting-support"]);
   assert.deepEqual(suggestCategories("engine-bug"), ["engine-bugs"]);
 });
+
+test("a docs path cannot leave the tree through percent-encoding or backslashes", async () => {
+  const { resolveDocPath } = await import("../dist/docs.js");
+  for (const path of ["%2e%2e/%2e%2e/README.md", "a/%2E%2E/%2e%2e/%2e%2e/x", "..\\..\\README.md", "..%2f..%2fREADME.md"]) {
+    assert.throws(() => resolveDocPath(path), /outside the documentation tree/, path);
+  }
+  assert.equal(resolveDocPath("tutorials\\index.md"), "content/en-us/tutorials/index.md");
+});
+
+test("entities are decoded once, and a cut never leaves a code fence open", () => {
+  assert.equal(decodeEntities("&#38;lt;b&#38;gt; &amp;lt; &#x3C;"), "&lt;b&gt; &lt; <");
+  const cut = truncate(`intro\n\n\`\`\`lua\n${"local x = 1\n".repeat(100)}\`\`\``, 50);
+  assert.equal((cut.match(/^```/gm) ?? []).length % 2, 0);
+  assert.match(cut, /```\n\n…\[truncated\]$/);
+});
+
+test("a date that is not on the calendar is rejected, not rolled over", async () => {
+  const { isRealDate } = await import("../dist/tools/util.js");
+  const { futureDate } = await import("../dist/tools/forum.js");
+  assert.equal(isRealDate("2024-02-29"), true);
+  assert.equal(isRealDate("2026-02-31"), false);
+  assert.match(futureDate("2026-02-31"), /not a real date/);
+});
+
+test("a forum 403 reads as a private topic, a GitHub 403 as a rate limit", async () => {
+  const { toToolError } = await import("../dist/tools/util.js");
+  const { HttpError } = await import("../dist/http.js");
+  const forum = toToolError("get_thread(5) failed", new HttpError(403, "https://devforum.roblox.com/t/5.json"));
+  assert.match(forum.content[0].text, /private or restricted/);
+  const github = toToolError("x", new HttpError(403, "https://api.github.com/repos/a/b"));
+  assert.match(github.content[0].text, /rate limited/);
+});
+
+test("topic ids start at 1", () => {
+  assert.equal(parseTopicId(0), undefined);
+  assert.equal(parseTopicId(-5), undefined);
+  assert.equal(parseTopicId("https://devforum.roblox.com/t/slug/0"), undefined);
+});
+
+test("splitApiEntry reads Event:Connect as a question about the event", async () => {
+  const { splitApiEntry } = await import("../dist/tools/docs.js");
+  assert.equal(splitApiEntry("RunService.Heartbeat:Connect(function(dt) end)").raw, "RunService.Heartbeat");
+  assert.equal(splitApiEntry("game.Players.PlayerAdded:Wait()").raw, "DataModel.Players.PlayerAdded");
+  assert.equal(splitApiEntry('game:GetService("RunService").Stepped:Once').raw, "DataModel.RunService.Stepped");
+  // With nothing before the event, the call itself is what was asked about.
+  assert.equal(splitApiEntry("Heartbeat:Connect").raw, "Heartbeat.Connect");
+});
