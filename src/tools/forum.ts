@@ -233,10 +233,16 @@ async function runQueries(
   return { ...mergeResults(sets), failed };
 }
 
+/**
+ * A phrasing in quotes, unless it already is one: an exact-phrase search such as
+ * "\"attempt to index nil with\"" was echoed back as ""attempt to index nil with"".
+ */
+const quoted = (q: string): string => (/^".*"$/.test(q.trim()) ? q.trim() : `"${q}"`);
+
 /** Names the phrasings that failed and were left out, or nothing when every one answered. */
 function skippedNote(failed: string[]): string {
   if (failed.length === 0) return "";
-  return ` (${failed.map((q) => `"${q}"`).join(", ")} could not be searched and ${failed.length === 1 ? "was" : "were"} skipped)`;
+  return ` (${failed.map(quoted).join(", ")} could not be searched and ${failed.length === 1 ? "was" : "were"} skipped)`;
 }
 
 const asList = (q: string | string[]): string[] => (Array.isArray(q) ? [...new Set(q)] : [q]);
@@ -346,7 +352,7 @@ export function registerForumTools(server: McpServer): void {
         const byOrder =
           args.order === "relevance" ? found : onTopicOnly(found, posts, queries);
         const topics = applyMinLikes(byOrder, posts, args.min_likes);
-        const label = queries.map((q) => `"${q}"`).join(" / ");
+        const label = queries.map(quoted).join(" / ");
         if (topics.length === 0) {
           // "No threads matched" was printed ahead of "12 threads matched the text", which
           // contradicts itself; a floor that emptied the list is a different answer.
@@ -407,7 +413,7 @@ export function registerForumTools(server: McpServer): void {
         const queries = asList(args.query);
         const base = { category: area.slug ?? BUG_PARENT, after: args.after };
         let { topics, posts, matchedBy, positions, failed } = await runQueries(queries, base);
-        const label = queries.map((q) => `"${q}"`).join(" / ");
+        const label = queries.map(quoted).join(" / ");
 
         // A sentence-shaped symptom can match nothing while its keywords match a triaged
         // report, and answering "not a known engine bug" to that is worse than no answer.
@@ -462,7 +468,7 @@ export function registerForumTools(server: McpServer): void {
           .map((r, i) => topicLine(i + 1, r.topic, r.post, phrasings > 1 ? matchedBy.get(r.topic.id) : undefined))
           .join("\n\n");
         const widened = broadened
-          ? ` ${pairs.map(([asked, trimmed]) => `"${asked}" matched nothing as written, so "${trimmed}" was searched too`).join("; ")}.`
+          ? ` ${pairs.map(([asked, trimmed]) => `${quoted(asked)} matched nothing as written, so "${trimmed}" was searched too`).join("; ")}.`
           : "";
         // Say exactly what a badge means. Roblox retired the triage tags this header used to
         // promise, so [answered] — the reporter marking a Solution — is almost always what a

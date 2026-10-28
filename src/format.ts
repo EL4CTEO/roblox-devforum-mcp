@@ -1,9 +1,22 @@
 /** HTML -> Markdown, noise stripping and token budgeting. Zero dependencies. */
 
-const NAMED: Record<string, string> = {
-  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", hellip: "…",
-  mdash: "—", ndash: "–", rsquo: "'", lsquo: "'", ldquo: '"', rdquo: '"', middot: "·",
+/**
+ * Typography only: none of these is markup, so they can be decoded anywhere — the docs
+ * write "a 3&times;3 matrix" in prose that never passes through an HTML decoder.
+ */
+const TYPOGRAPHIC: Record<string, string> = {
+  nbsp: " ", hellip: "…", mdash: "—", ndash: "–", rsquo: "'", lsquo: "'", ldquo: '"', rdquo: '"',
+  middot: "·", times: "×", divide: "÷", dagger: "†", Dagger: "‡", deg: "°", plusmn: "±", le: "≤",
+  ge: "≥", ne: "≠", asymp: "≈", infin: "∞", rarr: "→", larr: "←", harr: "↔", bull: "•", trade: "™",
+  reg: "®", copy: "©", minus: "−",
 };
+
+const NAMED: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", ...TYPOGRAPHIC };
+
+/** Decode only the typographic named entities, leaving &lt; &gt; &amp; as written. */
+export function decodeTypography(input: string): string {
+  return input.replace(/&([a-z]+);/gi, (m, name: string) => TYPOGRAPHIC[name] ?? TYPOGRAPHIC[name.toLowerCase()] ?? m);
+}
 
 /** A numeric reference outside Unicode is left as written: fromCodePoint throws on it. */
 function codePoint(whole: string, value: number): string {
@@ -19,7 +32,46 @@ export function decodeEntities(input: string): string {
   return input.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi, (m, hex?: string, dec?: string, name?: string) => {
     if (hex !== undefined) return codePoint(m, parseInt(hex, 16));
     if (dec !== undefined) return codePoint(m, Number(dec));
-    return NAMED[(name ?? "").toLowerCase()] ?? m;
+    return NAMED[name ?? ""] ?? NAMED[(name ?? "").toLowerCase()] ?? m;
+  });
+}
+
+/** One table cell as a single line of Markdown: links, emphasis and code survive, layout does not. */
+function cellText(html: string): string {
+  return stripTags(
+    html
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "`$1`")
+      .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**")
+      .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, "*$2*")
+      .replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, body: string) => {
+        const text = stripTags(body).trim();
+        return text && text !== href ? `[${text}](${href})` : href;
+      }),
+  )
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+/**
+ * An HTML table as a Markdown one.
+ *
+ * Both sources write tables in HTML: Discourse cooks a Markdown table into <table>, and the
+ * docs guides embed raw <table> markup. The tag strip used to flatten every cell onto a line
+ * of its own, so a two-column roadmap read as one long list with the pairing lost, and a docs
+ * limits table spent most of its tokens on <tr> and <td> lines when passed through as written.
+ */
+export function htmlTablesToMarkdown(html: string): string {
+  return html.replace(/<table\b[^>]*>([\s\S]*?)<\/table>/gi, (whole, body: string) => {
+    const rows = [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((row) =>
+      [...(row[1] ?? "").matchAll(/<t([hd])\b[^>]*>([\s\S]*?)<\/t\1>/gi)].map((cell) => cellText(cell[2] ?? "")),
+    );
+    const width = Math.max(0, ...rows.map((r) => r.length));
+    if (rows.length === 0 || width === 0) return whole;
+    const line = (cells: string[]) => `| ${Array.from({ length: width }, (_, i) => cells[i] ?? "").join(" | ")} |`;
+    const [head = [], ...rest] = rows;
+    return `\n\n${[line(head), line(Array(width).fill("---")), ...rest.map(line)].join("\n")}\n\n`;
   });
 }
 
@@ -35,8 +87,21 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
   // always a re-quote of something already on screen — but the first post of a topic has
   // nothing earlier to quote, so there the block is real content (Roblox styles its Weekly
   // Recap summaries this way), and callers pass keepQuotes for it.
+  //
+  // The kept body starts after the tag's closing ">", not after its class: a quote that names
+  // its source writes data-username, data-post and data-topic after the class, and those used
+  // to reach the caller as ` data-username="rbitia_rbx" data-post="605" … data-full="true">`.
+  // Its title bar is an avatar, a control strip and "name:", so it becomes "name wrote:".
   s = options.keepQuotes
-    ? s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"([\s\S]*?)<\/aside>/gi, (_m, body: string) => body)
+    ? s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"[^>]*>([\s\S]*?)<\/aside>/gi, (_m, body: string) =>
+        body
+          .replace(/<div\b[^>]*class="[^"]*quote-controls[^"]*"[^>]*>\s*<\/div>/gi, "")
+          .replace(/<img\b[^>]*class="[^"]*avatar[^"]*"[^>]*>/gi, "")
+          .replace(/<div\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i, (_t, who: string) => {
+            const name = stripTags(who).trim().replace(/:$/, "");
+            return name ? `\n${name} wrote:\n` : "";
+          }),
+      )
     : s.replace(/<aside\b[^>]*class="[^"]*quote[^"]*"[\s\S]*?<\/aside>/gi, "\n[quoted earlier reply]\n");
   s = s.replace(/<aside\b[\s\S]*?<\/aside>/gi, "");
   s = s.replace(/<(script|style|svg|noscript)\b[\s\S]*?<\/\1>/gi, "");
@@ -74,6 +139,7 @@ export function htmlToMarkdown(html: string, options: { keepQuotes?: boolean } =
   );
   s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_m, body: string) => `\n\n${park(`\`\`\`\n${decodeEntities(stripTags(body)).trim()}\n\`\`\``)}\n\n`);
   s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_m, body: string) => park(`\`${decodeEntities(stripTags(body)).trim()}\``));
+  s = htmlTablesToMarkdown(s);
 
   // Structure
   s = s.replace(/<br\s*\/?>/gi, "\n");

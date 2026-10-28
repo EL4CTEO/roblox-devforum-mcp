@@ -1,6 +1,7 @@
 /** Official Roblox documentation: creator-docs sources + the engine API dump. */
 
 import { cachedJson } from "./cache.js";
+import { decodeTypography, htmlTablesToMarkdown } from "./format.js";
 import { envInt, getGithubJson, getText, TTL } from "./http.js";
 
 const DOCS_REPO = "Roblox/creator-docs";
@@ -106,11 +107,18 @@ export function docUrl(path: string): string {
  * and their text stays — an <Alert> body is real content, its angle brackets are not.
  */
 function stripMdx(text: string): string {
-  return text
+  return htmlTablesToMarkdown(text)
     .replace(/^import\s+\w+\s+from\s+['"][^'"]+['"];?\s*$/gm, "")
     .replace(/<\/?[A-Z]\w*(?:\s[^<>]*?)?\/?>/g, "")
+    // An embedded video is a player the caller cannot run; its title is all that says anything.
+    .replace(/<(iframe|video)\b[^<>]*>(?:[\s\S]*?<\/\1>)?/gi, (tag) => {
+      const title = /\btitle="([^"]*)"/i.exec(tag)?.[1];
+      return title && !/youtube video player/i.test(title) ? `[video: ${title}]` : "";
+    })
+    // Inline code written as HTML, cross-reference pipes and all: "<code>Instance|Instances</code>".
+    .replace(/<code>([^<]*)<\/code>/gi, "`$1`")
     // The handful of raw HTML tags the guides use are layout too; their text is the content.
-    .replace(/<\/?(?:figure|figcaption|div|span|center|br|p)(?:\s[^<>]*?)?\/?>/gi, "")
+    .replace(/<\/?(?:figure|figcaption|div|span|center|br|p|sup|sub)(?:\s[^<>]*?)?\/?>/gi, "")
     // A screenshot is a repo-relative src the caller cannot open; only its alt text says
     // anything, and most guide images have none.
     .replace(/<img\b[^<>]*>/gi, (tag) => {
@@ -159,15 +167,19 @@ export function cleanDocProse(text: string, sourcePath?: string): string {
   // "Datatype.Vector3:Cross()|Cross()" — and matching the pipe only straight after the name
   // left both halves on the page: Vector3's own summary reached the caller reading
   // "Vector3:Cross()|Cross()", and Humanoid's page carries twenty of them.
-  const s = stripMdx(text).replace(
-    /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(\(\))?(?:\|([^`\n]*)(?=`))?/g,
-    (whole, kind: string, name: string, parens: string | undefined, display?: string) =>
-      display !== undefined
-        ? display
-        : kind === "Enum"
-          ? whole
-          : `${kind === "Global" ? name.replace(GLOBAL_CONTAINER, "") : name}${parens ?? ""}`,
-  );
+  const s = decodeTypography(stripMdx(text))
+    .replace(
+      /\b(Class|Datatype|Enum|Global|Library|Security)\.([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)?)(\(\))?(?:\|([^`\n]*)(?=`))?/g,
+      (whole, kind: string, name: string, parens: string | undefined, display?: string) =>
+        display !== undefined
+          ? display
+          : kind === "Enum"
+            ? whole
+            : `${kind === "Global" ? name.replace(GLOBAL_CONTAINER, "") : name}${parens ?? ""}`,
+    )
+    // The same display pipe without its kind prefix — "`CFrame.LookVector|LookVector`" — which
+    // the HTML-written references in reference pages use.
+    .replace(/`([A-Za-z0-9_]+(?:[.:][A-Za-z0-9_]+)*(?:\(\))?)\|([^`\n]+)`/g, "`$2`");
   const cut = sourcePath?.lastIndexOf("/") ?? -1;
   const dir = sourcePath !== undefined && cut > 0 ? sourcePath.slice(0, cut) : undefined;
   return s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (whole, label: string, href: string) => {
@@ -243,7 +255,9 @@ export function cleanReferenceYaml(text: string): string {
   return text
     .replace(/^(?:#[^\n]*\n)+/, "")
     .split("\n")
-    .filter((line) => !/^\s*[a-z_]+:\s*(\[\]|\{\}|''|""|null)\s*$/.test(line))
+    // A bare `default:` is YAML's null too — a parameter with no default — and the library
+    // pages print one under every parameter. Other bare keys open a block and stay.
+    .filter((line) => !/^\s*[a-z_]+:\s*(\[\]|\{\}|''|""|null)\s*$/.test(line) && !/^\s*default:\s*$/.test(line))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimStart();
@@ -405,6 +419,47 @@ export function resolveDocPath(path: string): string {
     throw new Error(`"${path}" is outside the documentation tree — paths start with ${DOCS_ROOT}`);
   }
   return resolved;
+}
+
+/**
+ * The page a caller means by `path`, which is not always a repo path.
+ *
+ * Every result and every docs link this server prints is a create.roblox.com URL, so that is
+ * what a model passes back — and "https://create.roblox.com/docs/scripting/multithreading"
+ * was fetched as a repo file and answered with a bare 404, as was the extension-less
+ * "cloud-services/data-stores" whose page is that folder's index.md. The URL is mapped back
+ * to the repo, and a path without its extension is tried as a guide, a folder index and a
+ * reference page. A miss names the nearest real pages rather than a status code.
+ */
+export async function findDocPage(input: string): Promise<{ path?: string; near: string[] }> {
+  const asked = input
+    .trim()
+    .replace(/^(?:https?:\/\/)?create\.roblox\.com\/docs\/(?:en-us\/)?/i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+  const resolved = resolveDocPath(asked);
+  const bare = resolved.replace(/\.(md|yaml)$/, "");
+  const candidates = [resolved, `${bare}.md`, `${bare}/index.md`, `${bare}.yaml`];
+  let paths: string[];
+  try {
+    paths = await docPaths();
+  } catch {
+    // Without the tree there is nothing to match against; let the fetch decide.
+    return { path: /\.(md|yaml)$/.test(resolved) ? resolved : `${bare}.md`, near: [] };
+  }
+  for (const candidate of candidates) {
+    const found = await findDocPath(candidate);
+    if (found) return { path: found, near: [] };
+  }
+  const terms = queryTerms(bare.slice(bare.lastIndexOf("/") + 1).replace(/-/g, " "));
+  const compact = terms.join("");
+  const near = paths
+    .map((path) => ({ path, score: terms.length ? scorePath(path, terms, compact) : 0 }))
+    .filter((c) => c.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((c) => c.path);
+  return { near };
 }
 
 /** Fetch a documentation page source (Markdown guide or reference YAML). */
@@ -613,11 +668,12 @@ export function blockIsDeprecated(block: string): boolean {
 async function lookupOnPages(paths: string[], name: string): Promise<DocMember | undefined> {
   const pages = await Promise.all(paths.map(async (path) => ({ path, members: referenceMembers(await fetchDoc(path)) })));
   const describe = (path: string, docName: string, block: string, exact: boolean): DocMember => {
-    const raw = blockDeprecationMessage(block);
+    const deprecated = blockIsDeprecated(block);
+    const raw = deprecated ? blockDeprecationGuidance(block) : undefined;
     return {
       name: docName,
       exact,
-      deprecated: blockIsDeprecated(block),
+      deprecated,
       path,
       ...(raw === undefined ? {} : { note: cleanDocProse(raw, path) }),
     };
@@ -747,13 +803,17 @@ export function parseDeprecationMessage(yaml: string, memberName?: string): stri
   const block = memberName
     ? blocks.find((b) => new RegExp(`^\\s*-\\s+name:\\s+\\S*[.:]${escapeRe(memberName)}\\s*$`, "m").test(b))
     : blocks[0];
-  return block === undefined ? undefined : blockDeprecationMessage(block);
+  if (block === undefined) return undefined;
+  return memberName ? blockDeprecationGuidance(block) : blockDeprecationMessage(block);
 }
 
-/** The `deprecation_message` of one member block (or of the page header block). */
-export function blockDeprecationMessage(block: string): string | undefined {
+/**
+ * One scalar field of a block, joined onto a single line. With `paragraph`, a block scalar
+ * stops at its first blank line rather than running to the end of the field.
+ */
+function blockScalar(block: string, key: string, paragraph = false): string | undefined {
   const lines = block.split("\n");
-  const at = lines.findIndex((l) => /^\s*deprecation_message:/.test(l));
+  const at = lines.findIndex((l) => new RegExp(`^\\s*${key}:`).test(l));
   if (at < 0) return undefined;
 
   const first = lines[at] ?? "";
@@ -768,12 +828,40 @@ export function blockDeprecationMessage(block: string): string | undefined {
   const indent = (first.match(/^\s*/)?.[0] ?? "").length;
   const body: string[] = [];
   for (const line of lines.slice(at + 1)) {
-    if (line.trim() === "") continue;
+    if (line.trim() === "") {
+      if (paragraph && body.length > 0) break;
+      continue;
+    }
     if ((line.match(/^\s*/)?.[0] ?? "").length <= indent) break;
     body.push(line.trim());
   }
   const text = body.join(" ").trim();
   return text || undefined;
+}
+
+/** The `deprecation_message` of one member block (or of the page header block). */
+export function blockDeprecationMessage(block: string): string | undefined {
+  return blockScalar(block, "deprecation_message");
+}
+
+/** A member block's own one-paragraph `summary`, if it has one. */
+export function blockSummary(block: string): string | undefined {
+  return blockScalar(block, "summary", true);
+}
+
+/**
+ * What to use instead of a deprecated member: its `deprecation_message`, or — since most of
+ * those are empty strings — the opening paragraph of its description, where the docs usually
+ * say it. Model:SetPrimaryPartCFrame carries `deprecation_message: ''` and opens with "This
+ * function has been superseded by PVInstance:PivotTo()", and check_api_health printed a bare
+ * DEPRECATED with the replacement sitting one field away. The paragraph only counts when it
+ * talks about the deprecation; a plain description says nothing about what replaced it.
+ */
+export function blockDeprecationGuidance(block: string): string | undefined {
+  const message = blockDeprecationMessage(block);
+  if (message) return message;
+  const lead = blockScalar(block, "description", true);
+  return lead && /supersed|deprecat|replace|instead|obsolete|no longer|legacy/i.test(lead) ? lead : undefined;
 }
 
 /** Best-effort replacement guidance from the docs for a deprecated class or member. */
@@ -783,6 +871,29 @@ export async function deprecationNote(className: string, memberName?: string): P
     const yaml = await fetchDoc(path);
     const raw = parseDeprecationMessage(yaml, memberName) ?? (memberName ? parseDeprecationMessage(yaml) : undefined);
     return raw === undefined ? undefined : cleanDocProse(raw, path);
+  } catch {
+    return undefined; // docs are a bonus, never required
+  }
+}
+
+/** What the docs say about one class member: its summary, and what replaced it if anything. */
+export async function memberDocs(
+  className: string,
+  memberName: string,
+): Promise<{ summary?: string; deprecation?: string } | undefined> {
+  try {
+    const path = resolveDocPath(`reference/engine/classes/${className}.yaml`);
+    const named = new RegExp(`^\\s*-\\s+name:\\s+\\S*[.:]${escapeRe(memberName)}\\s*$`, "m");
+    const block = splitMemberBlocks(await fetchDoc(path)).slice(1).find((b) => named.test(b));
+    if (block === undefined) return undefined;
+    const summary = blockSummary(block);
+    // Not gated on the docs' own tag: the caller only shows this for a member the dump marks
+    // deprecated, and the two sources do not always agree on when that happened.
+    const deprecation = blockDeprecationGuidance(block);
+    return {
+      ...(summary ? { summary: cleanDocProse(summary, path) } : {}),
+      ...(deprecation ? { deprecation: cleanDocProse(deprecation, path) } : {}),
+    };
   } catch {
     return undefined; // docs are a bonus, never required
   }

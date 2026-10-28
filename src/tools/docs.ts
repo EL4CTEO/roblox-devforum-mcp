@@ -10,6 +10,7 @@ import {
   escapeRe,
   fetchDoc,
   findClass,
+  findDocPage,
   findEnum,
   findDatatype,
   nearestNames,
@@ -26,6 +27,7 @@ import {
   deprecationNote,
   findLibrary,
   globalMember,
+  memberDocs,
   libraryMember,
   referenceMembers,
   type ApiMember,
@@ -134,14 +136,36 @@ type Walked = { className: string; memberName: string } | { unresolved: string; 
  * stop the walk rather than guess: a child the game named itself ("workspace.Map.Door"), and
  * a property typed plain Instance ("script.Parent"), which can hold any class at runtime —
  * both used to end in "Instance has no member Touched" for code that works.
- * Returns undefined when the root is not a class, so the caller keeps its own reading.
+ *
+ * A child or variable the walk cannot type is not always the end of it: a later segment
+ * spelled like a class is that class, the same reading `.Humanoid` gets, so the walk picks up
+ * again from there — "self.Humanoid.RootPart.CFrame" is Humanoid.RootPart (a BasePart), then
+ * its CFrame. Only a path with no such segment stops.
  */
 async function walkPath(segments: string[]): Promise<Walked | undefined> {
-  const root = segments[0] === undefined ? undefined : await findClass(segments[0]);
   const last = segments[segments.length - 1];
-  if (!root || last === undefined) return undefined;
+  if (segments.length < 2 || last === undefined) return undefined;
+  const head = segments[0] as string;
+  const root = await findClass(head);
+  if (!root) {
+    // A datatype value: its members are in the docs, and what they hold is not followed.
+    const datatype = await findDatatype(head);
+    if (datatype) {
+      const next = segments[1] as string;
+      if (segments.length === 2 || !(await datatypeMembers(datatype)).has(next)) return { className: datatype, memberName: next };
+      return { unresolved: next, why: `is a member of the ${datatype} datatype, whose value is not followed further` };
+    }
+    // A variable at the root: "hit.Parent.Humanoid", "plr.Character.HumanoidRootPart.CFrame".
+    // Only its last two segments used to be read, so these came back "NOT FOUND — no class
+    // Parent" and "no class HumanoidRootPart": a false alarm on two of the commonest lines in
+    // Luau. Resume at a class-named segment, or say the class cannot be known.
+    const resume = await classSegment(segments, 1);
+    if (resume !== undefined) return walkPath(segments.slice(resume));
+    if (segments.length === 2) return undefined;
+    return { unresolved: head, why: "is a variable, not a class, service or library" };
+  }
   let current = root.Name;
-  for (const segment of segments.slice(1, -1)) {
+  for (const [i, segment] of segments.slice(1, -1).entries()) {
     const named = await findClass(segment);
     if (named && named.Name === segment) {
       current = named.Name;
@@ -154,19 +178,44 @@ async function walkPath(segments: string[]): Promise<Walked | undefined> {
     if (!property) {
       // A method or event in the middle of a path is not "a child the game names itself".
       const kind = found?.exact ? found.member.MemberType.toLowerCase() : undefined;
+      if (!kind) {
+        const resume = await classSegment(segments, i + 2);
+        if (resume !== undefined) return walkPath(segments.slice(resume));
+      }
       return {
         unresolved: segment,
         why: kind
-          ? `is a ${kind} of ${current}, not a property, so nothing can be indexed on it`
-          : `is not a member of ${current}, so it is a child the game names itself`,
+          ? `is a ${kind} of ${current}, not a property`
+          : `is not a member of ${current} — a child the game names itself`,
       };
     }
     const typed = property.ValueType?.Name;
     const next = typed === undefined || typed === "Instance" ? undefined : await findClass(typed);
-    if (!next) return { unresolved: segment, why: `is typed ${typed ?? "unknown"}, so it can hold any class at runtime` };
+    if (!next) {
+      // A property holding a datatype — Camera.CFrame, BasePart.Position — has members of its
+      // own, documented with the datatype: "workspace.CurrentCamera.CFrame.LookVector" was
+      // answered "typed CFrame, so it can hold any class", which is not what a CFrame is.
+      const datatype = typed === undefined || typed === "Instance" ? undefined : await findDatatype(typed);
+      if (datatype && i + 2 === segments.length - 1) return { className: datatype, memberName: last };
+      return {
+        unresolved: segment,
+        why: datatype
+          ? `is a ${datatype}, whose members are not followed further`
+          : `is typed ${typed ?? "unknown"} and can hold any class at runtime`,
+      };
+    }
     current = next.Name;
   }
   return { className: current, memberName: last };
+}
+
+/** The first segment from `from` on that is spelled exactly like a class, with a member after it. */
+async function classSegment(segments: string[], from: number): Promise<number | undefined> {
+  for (let i = from; i < segments.length - 1; i += 1) {
+    const segment = segments[i] as string;
+    if ((await findClass(segment))?.Name === segment) return i;
+  }
+  return undefined;
 }
 
 /**
@@ -245,7 +294,7 @@ async function checkEntry(entry: string): Promise<string> {
   if (segments.length > 2) {
     const walked = await walkPath(segments);
     if (walked && "unresolved" in walked) {
-      return `${STATE.unchecked} ${entry} — "${walked.unresolved}" ${walked.why}, and its class cannot be known from here. Check the member on that class instead, e.g. "Part.Touched".`;
+      return `${STATE.unchecked} ${entry} — "${walked.unresolved}" ${walked.why}, so what follows cannot be checked from here. Check the member on its class instead, e.g. "Part.Touched".`;
     }
     if (walked) ({ className, memberName } = walked);
   }
@@ -394,7 +443,7 @@ export function registerDocsTools(server: McpServer): void {
         "Find and read pages from Roblox's official creator documentation (create.roblox.com/docs). Call with `query` to list matching pages, then call again with `path` from a result to read that page in full. Use this for intended behaviour, limits and quotas, and guide-level explanations — pair it with search_devforum for what actually happens in production.",
       inputSchema: {
         query: z.string().optional().describe("What to look for, e.g. \"data store limits\" or \"ProximityPrompt\"."),
-        path: z.string().optional().describe("Repo path from a previous result, e.g. content/en-us/cloud-services/data-stores/index.md. Returns the full page."),
+        path: z.string().optional().describe("Repo path from a previous result, e.g. content/en-us/cloud-services/data-stores/index.md, or a create.roblox.com/docs URL. Returns the full page."),
         limit: z.number().int().min(1).max(25).default(10),
         max_tokens: z.number().int().min(300).max(12000).default(3000),
       },
@@ -405,8 +454,13 @@ export function registerDocsTools(server: McpServer): void {
       try {
         if (args.path) {
           // Resolve once, so the URL printed as the source is the page actually fetched.
-          const resolved = resolveDocPath(args.path);
-          if (isReleaseNotesQuery(resolved)) return fail(`${resolved} is not in the docs repo. ${RELEASE_NOTES_HINT}`);
+          const page = await findDocPage(args.path);
+          const resolved = page.path;
+          if (resolved === undefined) {
+            if (isReleaseNotesQuery(args.path)) return fail(`${args.path} is not in the docs repo. ${RELEASE_NOTES_HINT}`);
+            const near = page.near.length ? ` Closest pages: ${page.near.join(", ")}.` : "";
+            return fail(`No documentation page at "${args.path}".${near} Or search with \`query\` to find it.`);
+          }
           const source = await fetchDoc(resolved);
           const shaped = resolved.endsWith(".yaml") ? cleanReferenceYaml(source) : renderGuide(source);
           const text = cleanDocProse(shaped, resolved);
@@ -514,9 +568,21 @@ export function registerDocsTools(server: McpServer): void {
         }
         const target = walked ?? entry;
         const looked = (await findClass(args.name)) ? args.name : target.className;
-        const memberFilter = looked === args.name ? undefined : target.memberName;
+        let memberFilter = looked === args.name ? undefined : target.memberName;
 
-        const cls = await findClass(looked);
+        let cls = await findClass(looked);
+        // "Character.Humanoid" indexes a child, and check_api_health answers it as one. This
+        // tool answered "Model has no member Humanoid" for the same line, which reads as a
+        // broken path; the caller wants the class the child is.
+        let childNote = "";
+        if (cls && memberFilter !== undefined && !(await resolveMember(cls.Name, memberFilter))) {
+          const child = await findClass(memberFilter);
+          if (child && child.Name === memberFilter) {
+            childNote = `"${memberFilter}" is not a member of ${cls.Name}: it indexes a child named "${memberFilter}", which errors if it is missing. That child's class:\n\n`;
+            cls = child;
+            memberFilter = undefined;
+          }
+        }
         if (!cls) {
           // "Enum.RaycastFilterType" is how Luau spells it and how check_api_health prints
           // it back, but only the bare name used to resolve: the prefixed form fell through
@@ -526,12 +592,12 @@ export function registerDocsTools(server: McpServer): void {
           // Font is an enum and a datatype both, so unprefixed, only an item name makes it the
           // enum: "Font.new" is the datatype's constructor.
           const prefixed = /^Enum\.([A-Za-z0-9_]+)/.exec(entry.raw)?.[1];
-          const enumType = await findEnum(prefixed ?? entry.className);
+          const enumType = await findEnum(prefixed ?? target.className);
           const lower = memberFilter?.toLowerCase();
           const namesItem = (enumType?.Items ?? []).some((i) => i.Name.toLowerCase() === lower);
           if (
             enumType &&
-            (prefixed !== undefined || lower === undefined || namesItem || !(await findDatatype(entry.className)))
+            (prefixed !== undefined || lower === undefined || namesItem || !(await findDatatype(target.className)))
           ) {
             const items = (enumType.Items ?? []).map((i) => `${i.Name} = ${i.Value}`).join(", ");
             // A named item is the question; the whole list only backs the answer up. It used to
@@ -552,13 +618,17 @@ export function registerDocsTools(server: McpServer): void {
             if (itemName !== undefined && (enumType.Items ?? []).some((i) => i.Name === itemName)) {
               return ok(`${lead}Enum.${enumType.Name} has ${enumType.Items?.length ?? 0} items — call get_engine_api with "${enumType.Name}" to list them.`);
             }
-            return ok(truncate(`${lead}Enum.${enumType.Name}\n${items || "(no items)"}`, args.max_tokens, "the item list is cut"));
+            // Font is both, and the bare name answers with the enum; say the datatype exists, or
+            // a caller after Font.new reads the item list as all there is.
+            const twin = prefixed === undefined && itemName === undefined ? await findDatatype(target.className) : undefined;
+            const also = twin ? ` (${twin} is also a datatype — ask for "${twin}.new" for its constructors and members)` : "";
+            return ok(truncate(`${lead}Enum.${enumType.Name}${also}\n${items || "(no items)"}`, args.max_tokens, "the item list is cut"));
           }
           // Vector3, CFrame and UDim2 are datatypes, not classes, so the dump has no entry
           // and this answered "no engine class named Vector3. Did you mean Vector3Curve,
           // Vector3Value?" — two real classes, neither of them what was asked about. Their
           // signatures live in the docs, and check_api_health already knew to look there.
-          const datatype = await findDatatype(entry.className);
+          const datatype = await findDatatype(target.className);
           if (datatype) {
             const path = resolveDocPath(`reference/engine/datatypes/${datatype}.yaml`);
             const page = cleanDocProse(cleanReferenceYaml(await fetchDoc(path)), path);
@@ -570,14 +640,14 @@ export function registerDocsTools(server: McpServer): void {
           // task, math, string… and the bare globals are documented but not in the dump, so
           // "task.wait" answered "no engine class named task.wait" — the same false negative
           // check_api_health gave, from the tool a model asks next.
-          const library = await findLibrary(entry.className);
-          const globalPath = library || memberFilter !== undefined ? undefined : (await globalMember(entry.className))?.path;
+          const library = await findLibrary(target.className);
+          const globalPath = library || memberFilter !== undefined ? undefined : (await globalMember(target.className))?.path;
           const docPath = library ? resolveDocPath(`reference/engine/libraries/${library}.yaml`) : globalPath;
           if (docPath) {
             const page = cleanDocProse(cleanReferenceYaml(await fetchDoc(docPath)), docPath);
-            const narrow = library ? memberFilter : entry.className;
+            const narrow = library ? memberFilter : target.className;
             const body = narrow === undefined ? page : filterDatatypeMembers(page, narrow);
-            const what = library ? `${library} is a Luau library` : `${entry.className} is a global function`;
+            const what = library ? `${library} is a Luau library` : `${target.className} is a global function`;
             return ok(
               `${what}, not a class — from the documentation, not the API dump.\n${docUrl(docPath)}\n\n${truncate(body, args.max_tokens, "read the page online")}`,
             );
@@ -671,7 +741,19 @@ export function registerDocsTools(server: McpServer): void {
           .filter(Boolean)
           .join("\n");
 
-        return ok(truncate(`${head}\n\n${sections.join("\n\n")}`, args.max_tokens, "use `filter` to narrow"));
+        // One named member is a question about what it does, and a signature alone does not
+        // say; nor does a bare DEPRECATED say what to use instead. The docs answer both.
+        let about = "";
+        if (exact && memberFilter !== undefined) {
+          const found = await resolveMember(cls.Name, memberFilter);
+          const docs = found?.exact ? await memberDocs(found.owner.Name, found.member.Name) : undefined;
+          if (docs?.summary) about += `\n\nFrom the docs: ${docs.summary}`;
+          if (found?.member.Tags?.includes("Deprecated")) {
+            about += `\nDeprecated${docs?.deprecation ? `: ${docs.deprecation}` : " — the docs name no replacement."}`;
+          }
+        }
+
+        return ok(truncate(`${childNote}${head}\n\n${sections.join("\n\n")}${about}`, args.max_tokens, "use `filter` to narrow"));
       } catch (err) {
         return toToolError("get_engine_api failed", err);
       }

@@ -1168,3 +1168,32 @@ test("splitApiEntry reads Event:Connect as a question about the event", async ()
   // With nothing before the event, the call itself is what was asked about.
   assert.equal(splitApiEntry("Heartbeat:Connect").raw, "Heartbeat.Connect");
 });
+
+test("a kept quote loses its attributes and title bar, and a table stays a table", async () => {
+  const html =
+    '<aside class="quote" data-username="rbitia_rbx" data-post="605" data-topic="1" data-full="true">' +
+    '<div class="title"><div class="quote-controls"></div><img alt="" width="24" src="a.png" class="avatar"> rbitia_rbx:</div>' +
+    "<blockquote><p>Roadmap.</p></blockquote></aside>" +
+    '<div class="md-table"><table><thead><tr><th>Asked</th><th>Answer</th></tr></thead>' +
+    "<tbody><tr><td>Badges</td><td>In <code>February</code> | maybe</td></tr></tbody></table></div>";
+  const md = htmlToMarkdown(html, { keepQuotes: true });
+  assert.doesNotMatch(md, /data-|\[image\]/);
+  assert.match(md, /rbitia_rbx wrote:\n+Roadmap\./);
+  assert.match(md, /\| Asked \| Answer \|\n\| --- \| --- \|\n\| Badges \| In `February` \\| maybe \|/);
+});
+
+test("docs prose loses HTML tables, entities and bare display pipes", async () => {
+  const { cleanDocProse, cleanReferenceYaml, blockDeprecationGuidance } = await import("../dist/docs.js");
+  const prose = cleanDocProse(
+    "A 3&times;3 matrix.\n<table><tr><th>A</th></tr><tr><td>R00</td></tr></table>\n<code>CFrame.LookVector|LookVector</code> and &lt;b&gt;",
+  );
+  assert.match(prose, /3×3 matrix/);
+  assert.match(prose, /\| A \|\n\| --- \|\n\| R00 \|/);
+  assert.match(prose, /`LookVector` and &lt;b&gt;/);
+  assert.doesNotMatch(cleanReferenceYaml("params:\n  - name: x\n    default:\n    type: number\n"), /default/);
+  // The message is empty, so the description's opening paragraph names the replacement.
+  const block =
+    "  - name: Model:SetPrimaryPartCFrame\n    description: |\n      This function has been superseded by `PVInstance:PivotTo()`.\n\n      Sets the CFrame.\n    deprecation_message: ''\n";
+  assert.equal(blockDeprecationGuidance(block), "This function has been superseded by `PVInstance:PivotTo()`.");
+  assert.equal(blockDeprecationGuidance(block.replace("superseded by `PVInstance:PivotTo()`", "a plain sentence")), undefined);
+});

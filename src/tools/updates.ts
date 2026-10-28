@@ -9,7 +9,7 @@ import {
   topicUrl,
   type RawTopic,
 } from "../discourse.js";
-import { htmlToMarkdown, relativeDate, truncate } from "../format.js";
+import { htmlToMarkdown, plural, relativeDate, truncate } from "../format.js";
 import { fail, isRealDate, ok, toToolError, READ_ONLY } from "./util.js";
 
 function withinDays(topic: RawTopic, days: number): boolean {
@@ -218,7 +218,7 @@ export function registerUpdateTools(server: McpServer): void {
 
         const recentNotes = notes.filter((t) => withinDays(t, args.days)).slice(0, args.limit);
         if (recentNotes.length) {
-          sections.push(`## Release notes (last ${args.days} days)\n${recentNotes.map(line).join("\n")}`);
+          sections.push(`## Release notes (last ${plural(args.days, "day")})\n${recentNotes.map(line).join("\n")}`);
         }
 
         const recapIds = new Set(recaps.map((t) => t.id));
@@ -226,7 +226,7 @@ export function registerUpdateTools(server: McpServer): void {
           .filter((t) => withinDays(t, args.days) && !recapIds.has(t.id))
           .slice(0, args.limit);
         if (recentAnnouncements.length) {
-          sections.push(`## Announcements (last ${args.days} days)\n${recentAnnouncements.map(line).join("\n")}`);
+          sections.push(`## Announcements (last ${plural(args.days, "day")})\n${recentAnnouncements.map(line).join("\n")}`);
         }
 
         // Say what could not be loaded: "published nothing" would be a false claim about Roblox.
@@ -234,8 +234,8 @@ export function registerUpdateTools(server: McpServer): void {
         if (sections.length === 0) {
           return ok(
             missing.length
-              ? `Nothing to report in the last ${args.days} days${gap}. Retry shortly.`
-              : `Roblox published nothing in the last ${args.days} days. Try a longer window.`,
+              ? `Nothing to report in the last ${plural(args.days, "day")}${gap}. Retry shortly.`
+              : `Roblox published nothing in the last ${plural(args.days, "day")}. Try a longer window.`,
           );
         }
 

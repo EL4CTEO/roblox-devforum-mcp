@@ -333,3 +333,32 @@ test("get_whats_new reports the sections that loaded when one listing fails", as
   assert.match(text, /A new API/);
   assert.match(text, /release notes could not be loaded and is left out/);
 });
+
+test("a path rooted in a variable is resumed at a class, or left unchecked", async () => {
+  const { text } = await call("check_api_health", {
+    members: ["hit.Parent.Humanoid", "plr.Character.Humanoid:MoveTo", "self.Humanoid.Health", "x.y.z"],
+  });
+  // "hit" is a variable, and only the last two segments used to be read: "no class Parent".
+  assert.match(lineFor(text, "hit.Parent.Humanoid"), /^UNCHECKED .*"hit" is a variable/);
+  assert.match(lineFor(text, "plr.Character.Humanoid:MoveTo"), /^OK .*MoveTo\(/);
+  assert.match(lineFor(text, "self.Humanoid.Health"), /^OK .*Health: float/);
+  assert.match(lineFor(text, "x.y.z"), /^UNCHECKED /);
+});
+
+test("get_engine_api answers a class-named child with that child's class", async () => {
+  const { text, isError } = await call("get_engine_api", { name: "game.Players.LocalPlayer.Character.Humanoid" });
+  assert.equal(isError, false, text);
+  assert.match(text, /^"Humanoid" is not a member of Model: it indexes a child/);
+  assert.match(text, /\nHumanoid \(inherits Instance\)/);
+  assert.match(text, /MoveTo\(location: Vector3\)/);
+});
+
+test("search_creator_docs reads a create.roblox.com URL as the page it names", async () => {
+  const url = await call("search_creator_docs", { path: "https://create.roblox.com/docs/reference/engine/libraries/task#wait" });
+  assert.equal(url.isError, false, url.text);
+  assert.match(url.text, /^https:\/\/create\.roblox\.com\/docs\/reference\/engine\/libraries\/task\n/);
+  assert.match(url.text, /task\.wait/);
+  const missing = await call("search_creator_docs", { path: "reference/engine/libraries/tsak" });
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /No documentation page at "reference\/engine\/libraries\/tsak"/);
+});
