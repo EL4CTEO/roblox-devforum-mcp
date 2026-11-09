@@ -8,7 +8,7 @@ Developer Forum** and the **official creator docs**.
 When your agent hits a Roblox bug, it can check whether Roblox already has it triaged, read the
 accepted answer, and confirm the API before writing Luau.
 
-No API key, no login, no setup.
+No API key, no login, no setup. A small native binary (Rust): starts instantly, uses ~6 MB of RAM.
 
 ## Install
 
@@ -33,6 +33,14 @@ Any other MCP client:
     }
   }
 }
+```
+
+No Node.js? Download the binary for your system from the
+[latest release](https://github.com/EL4CTEO/roblox-devforum-mcp/releases/latest), or build it
+with `cargo install --git https://github.com/EL4CTEO/roblox-devforum-mcp`, then use it directly:
+
+```bash
+claude mcp add roblox-devforum -- /path/to/roblox-devforum-mcp
 ```
 
 ## Tools
@@ -80,6 +88,7 @@ All optional.
 | `DEVFORUM_DOCS_SCAN` | `14` | Doc pages scored per search. |
 | `DEVFORUM_CACHE_DIR` | OS temp dir | Where the API dump and docs index are cached. |
 | `DEVFORUM_BASE_URL` | `https://devforum.roblox.com` | Point at another Discourse instance. |
+| `ROBLOX_DEVFORUM_MCP_BINARY` | — | npm only: run this binary instead of the bundled one. |
 
 A bad value is ignored, with a note on stderr, and the default is used.
 
@@ -93,11 +102,16 @@ Not affiliated with or endorsed by Roblox Corporation.
 
 ## Development
 
+Needs Rust 1.99+.
+
 ```bash
-npm install && npm run build
-npm test          # offline unit and server tests
-npm run inspect   # MCP Inspector against the built server
+cargo build --release   # target/release/roblox-devforum-mcp
+cargo test              # offline unit and tool tests
+npm run inspect         # MCP Inspector against the release build
 ```
+
+Releases: push a `vX.Y.Z` tag and CI builds every binary, publishes to npm and attaches the
+binaries to the GitHub release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

@@ -3,8 +3,8 @@
 # dsh already speaks MCP through @deepseek-ai/dsh-mcp-client, so this file only has to say
 # how to start the server. Tools land in the registry as mcp__roblox-devforum__<tool>.
 #
-# Install from npm, not from git: dist/ is not committed, so a git install would have to
-# build the package inside the profile, which pnpm blocks until the build is allowlisted.
+# Install from npm, not from git: the npm package ships a prebuilt native binary, while a git
+# install would have to compile the Rust sources inside the profile.
 #
 #   dsh plugin --profile web add roblox-devforum-mcp
 #   dsh --profile web

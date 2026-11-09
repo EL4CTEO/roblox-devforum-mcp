@@ -1,5 +1,8 @@
 node_modules/
 dist/
+target/
+npm-out/
+artifacts/
 *.log
 .env
 .DS_Store

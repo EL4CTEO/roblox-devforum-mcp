@@ -1,0 +1,92 @@
+name: Release
+
+# Push a tag like v1.4.0 to build every binary, publish the npm packages and attach the
+# binaries to the GitHub release. npm publishing needs an NPM_TOKEN repository secret.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, npm: linux-x64, exe: roblox-devforum-mcp }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, npm: linux-arm64, exe: roblox-devforum-mcp }
+          - { os: macos-latest, target: aarch64-apple-darwin, npm: darwin-arm64, exe: roblox-devforum-mcp }
+          - { os: macos-latest, target: x86_64-apple-darwin, npm: darwin-x64, exe: roblox-devforum-mcp }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, npm: win32-x64, exe: roblox-devforum-mcp.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p "artifacts/${{ matrix.npm }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "artifacts/${{ matrix.npm }}/"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.npm }}
+          path: artifacts/${{ matrix.npm }}
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Release archives and notes
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            id=$(basename "$dir")
+            if [ "$id" = win32-x64 ]; then (cd "$dir" && zip -q "../../release/roblox-devforum-mcp-$id.zip" *)
+            else chmod +x "$dir"/*; tar -czf "release/roblox-devforum-mcp-$id.tar.gz" -C "$dir" .; fi
+          done
+          awk -v v="## ${GITHUB_REF_NAME#v}" '$0 ~ "^## " { p = index($0, v) == 1; next } p' CHANGELOG.md | sed '/./,$!d' > notes.md
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          body_path: notes.md
+
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Check the tag matches the version
+        run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+      - run: node scripts/npm-platforms.mjs artifacts npm-out
+      - name: Publish platform packages, then the launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is not set; skipping npm publish. Add the secret and re-run this job."
+            exit 0
+          fi
+          for dir in npm-out/*/; do npm publish "$dir" --access public --provenance; done
+          npm publish --access public --provenance
