@@ -13,13 +13,13 @@ No API key, no login, no setup. A small native binary (Rust): starts instantly, 
 ## Install
 
 ```bash
-claude mcp add roblox-devforum -- npx -y roblox-devforum-mcp
+claude mcp add roblox-devforum -- npx -y @el4cteo/roblox-devforum-mcp
 ```
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 
 ```bash
-dsh plugin --profile web add roblox-devforum-mcp
+dsh plugin --profile web add @el4cteo/roblox-devforum-mcp
 ```
 
 Any other MCP client:
@@ -29,7 +29,7 @@ Any other MCP client:
   "mcpServers": {
     "roblox-devforum": {
       "command": "npx",
-      "args": ["-y", "roblox-devforum-mcp"]
+      "args": ["-y", "@el4cteo/roblox-devforum-mcp"]
     }
   }
 }

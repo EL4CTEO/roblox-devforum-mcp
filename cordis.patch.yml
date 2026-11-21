@@ -6,7 +6,7 @@
 # Install from npm, not from git: the npm package ships a prebuilt native binary, while a git
 # install would have to compile the Rust sources inside the profile.
 #
-#   dsh plugin --profile web add roblox-devforum-mcp
+#   dsh plugin --profile web add @el4cteo/roblox-devforum-mcp
 #   dsh --profile web
 - insert:
     - id: roblox-devforum
@@ -15,4 +15,4 @@
         serverName: roblox-devforum
         transport: stdio
         command: npx
-        args: ['-y', 'roblox-devforum-mcp']
+        args: ['-y', '@el4cteo/roblox-devforum-mcp']

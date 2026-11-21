@@ -1,6 +1,6 @@
 [package]
 name = "roblox-devforum-mcp"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 rust-version = "1.99"
 description = "MCP server that searches the Roblox DevForum and official creator docs so AI coding agents can debug Roblox games against real community and engine knowledge."

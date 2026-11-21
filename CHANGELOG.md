@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1
+
+- Moved to `@el4cteo/roblox-devforum-mcp` on npm. Update your config to `npx -y @el4cteo/roblox-devforum-mcp`; the unscoped package is deprecated.
+
 ## 1.4.0
 
 - Rewritten in Rust: one native binary, no Node.js runtime needed.

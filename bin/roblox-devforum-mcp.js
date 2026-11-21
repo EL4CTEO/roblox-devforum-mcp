@@ -2,7 +2,7 @@
 // Launches the native roblox-devforum-mcp binary for this platform.
 //
 // The server is written in Rust; npm installs the matching prebuilt binary through one of the
-// optional roblox-devforum-mcp-<os>-<arch> packages, and this shim only starts it with stdio
+// optional @el4cteo/roblox-devforum-mcp-<os>-<arch> packages, and this shim only starts it with stdio
 // passed straight through. ROBLOX_DEVFORUM_MCP_BINARY points it at a binary of your own.
 
 "use strict";
@@ -14,7 +14,7 @@ const exe = process.platform === "win32" ? "roblox-devforum-mcp.exe" : "roblox-d
 
 function binaryPath() {
   if (process.env.ROBLOX_DEVFORUM_MCP_BINARY) return process.env.ROBLOX_DEVFORUM_MCP_BINARY;
-  const pkg = `roblox-devforum-mcp-${process.platform}-${process.arch}`;
+  const pkg = `@el4cteo/roblox-devforum-mcp-${process.platform}-${process.arch}`;
   try {
     return path.join(path.dirname(require.resolve(`${pkg}/package.json`)), "bin", exe);
   } catch {

@@ -1,6 +1,6 @@
 {
-  "name": "roblox-devforum-mcp",
-  "version": "1.4.0",
+  "name": "@el4cteo/roblox-devforum-mcp",
+  "version": "1.4.1",
   "description": "MCP server that searches the Roblox DevForum and official creator docs so AI coding agents can debug Roblox games against real community and engine knowledge.",
   "keywords": [
     "mcp",
@@ -44,11 +44,11 @@
     "LICENSE"
   ],
   "optionalDependencies": {
-    "roblox-devforum-mcp-darwin-arm64": "1.4.0",
-    "roblox-devforum-mcp-darwin-x64": "1.4.0",
-    "roblox-devforum-mcp-linux-arm64": "1.4.0",
-    "roblox-devforum-mcp-linux-x64": "1.4.0",
-    "roblox-devforum-mcp-win32-x64": "1.4.0"
+    "@el4cteo/roblox-devforum-mcp-darwin-arm64": "1.4.1",
+    "@el4cteo/roblox-devforum-mcp-darwin-x64": "1.4.1",
+    "@el4cteo/roblox-devforum-mcp-linux-arm64": "1.4.1",
+    "@el4cteo/roblox-devforum-mcp-linux-x64": "1.4.1",
+    "@el4cteo/roblox-devforum-mcp-win32-x64": "1.4.1"
   },
   "dsh": {
     "bundle": {

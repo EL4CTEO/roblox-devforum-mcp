@@ -3,7 +3,7 @@
 //   node scripts/npm-platforms.mjs <artifacts-dir> <out-dir>
 //
 // <artifacts-dir>/<os>-<arch>/roblox-devforum-mcp[.exe] for each platform below becomes
-// <out-dir>/<os>-<arch>/, a publishable package named roblox-devforum-mcp-<os>-<arch>.
+// <out-dir>/<os>-<arch>/, a publishable package named @el4cteo/roblox-devforum-mcp-<os>-<arch>.
 // Fails if Cargo.toml, package.json and the optionalDependencies disagree on the version.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,7 +28,7 @@ const cargo = /^version\s*=\s*"([^"]+)"/m.exec(readFileSync("Cargo.toml", "utf8"
 const problems = [];
 if (cargo !== root.version) problems.push(`Cargo.toml says ${cargo}, package.json says ${root.version}`);
 for (const p of PLATFORMS) {
-  const name = `roblox-devforum-mcp-${p.id}`;
+  const name = `${root.name}-${p.id}`;
   const pinned = root.optionalDependencies?.[name];
   if (pinned !== root.version) problems.push(`optionalDependencies["${name}"] is ${pinned}, expected ${root.version}`);
 }
@@ -53,9 +53,9 @@ for (const p of PLATFORMS) {
     join(dir, "package.json"),
     `${JSON.stringify(
       {
-        name: `roblox-devforum-mcp-${p.id}`,
+        name: `${root.name}-${p.id}`,
         version: root.version,
-        description: `The ${p.os}-${p.cpu} binary for roblox-devforum-mcp.`,
+        description: `The ${p.id} binary for ${root.name}.`,
         license: root.license,
         author: root.author,
         repository: root.repository,
@@ -69,6 +69,6 @@ for (const p of PLATFORMS) {
       2,
     )}\n`,
   );
-  writeFileSync(join(dir, "README.md"), `# roblox-devforum-mcp-${p.id}\n\nThe ${p.os}-${p.cpu} binary for [roblox-devforum-mcp](https://www.npmjs.com/package/roblox-devforum-mcp). Install that package instead.\n`);
+  writeFileSync(join(dir, "README.md"), `# ${root.name}-${p.id}\n\nThe ${p.id} binary for [${root.name}](https://www.npmjs.com/package/${root.name}). Install that package instead.\n`);
   console.log(`${dir} <- ${from}`);
 }
