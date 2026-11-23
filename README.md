@@ -2,6 +2,12 @@
 
 # roblox-devforum-mcp
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@el4cteo/roblox-devforum-mcp"><img src="https://img.shields.io/npm/v/@el4cteo/roblox-devforum-mcp?color=2563eb&label=npm" alt="npm"></a>
+  <a href="https://crates.io/crates/roblox-devforum-mcp"><img src="https://img.shields.io/crates/v/roblox-devforum-mcp?color=2563eb" alt="crates.io"></a>
+  <a href="https://github.com/EL4CTEO/roblox-devforum-mcp/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="MIT"></a>
+</p>
+
 An [MCP](https://modelcontextprotocol.io) server that gives an AI coding agent the **Roblox
 Developer Forum** and the **official creator docs**.
 
@@ -37,7 +43,7 @@ Any other MCP client:
 
 No Node.js? Download the binary for your system from the
 [latest release](https://github.com/EL4CTEO/roblox-devforum-mcp/releases/latest), or build it
-with `cargo install --git https://github.com/EL4CTEO/roblox-devforum-mcp`, then use it directly:
+with `cargo install roblox-devforum-mcp`, then use it directly:
 
 ```bash
 claude mcp add roblox-devforum -- /path/to/roblox-devforum-mcp
