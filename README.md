@@ -1,6 +1,6 @@
-<img src="https://raw.githubusercontent.com/EL4CTEO/roblox-devforum-mcp/main/assets/devforum.png" alt="Roblox Developer Forum" width="440">
+<p align="center"><img src="https://raw.githubusercontent.com/EL4CTEO/roblox-devforum-mcp/main/assets/devforum.png" alt="Roblox Developer Forum" width="440"></p>
 
-# roblox-devforum-mcp
+<h1 align="center">roblox-devforum-mcp</h1>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@el4cteo/roblox-devforum-mcp"><img src="https://img.shields.io/npm/v/@el4cteo/roblox-devforum-mcp?color=2563eb&label=npm" alt="npm"></a>
@@ -8,13 +8,9 @@
   <a href="https://github.com/EL4CTEO/roblox-devforum-mcp/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="MIT"></a>
 </p>
 
-An [MCP](https://modelcontextprotocol.io) server that gives an AI coding agent the **Roblox
-Developer Forum** and the **official creator docs**.
+An [MCP](https://modelcontextprotocol.io) server that gives your AI coding agent the **Roblox DevForum** and the **official creator docs**: check if a bug is already known, read the accepted answer, verify APIs before writing Luau.
 
-When your agent hits a Roblox bug, it can check whether Roblox already has it triaged, read the
-accepted answer, and confirm the API before writing Luau.
-
-No API key, no login, no setup. A small native binary (Rust): starts instantly, uses ~6 MB of RAM.
+No API key, no login. One native Rust binary: starts in ~12 ms, ~6 MB RAM.
 
 ## Install
 
@@ -41,9 +37,7 @@ Any other MCP client:
 }
 ```
 
-No Node.js? Download the binary for your system from the
-[latest release](https://github.com/EL4CTEO/roblox-devforum-mcp/releases/latest), or build it
-with `cargo install roblox-devforum-mcp`, then use it directly:
+No Node.js? Grab the binary from the [latest release](https://github.com/EL4CTEO/roblox-devforum-mcp/releases/latest) or `cargo install roblox-devforum-mcp`, then:
 
 ```bash
 claude mcp add roblox-devforum -- /path/to/roblox-devforum-mcp
@@ -67,9 +61,7 @@ claude mcp add roblox-devforum -- /path/to/roblox-devforum-mcp
 
 Every tool is read-only, returns Markdown with source URLs, and stays inside a token budget.
 
-`[answered]` beside a result means a reply was marked as the solution — by whoever opened the
-thread, not by Roblox. Roblox does not publish a triage state, so read the thread to see
-whether staff replied.
+`[answered]` means the thread's author marked a solution (not Roblox staff).
 
 ## Example
 
@@ -96,13 +88,11 @@ All optional.
 | `DEVFORUM_BASE_URL` | `https://devforum.roblox.com` | Point at another Discourse instance. |
 | `ROBLOX_DEVFORUM_MCP_BINARY` | — | npm only: run this binary instead of the bundled one. |
 
-A bad value is ignored, with a note on stderr, and the default is used.
+Invalid values fall back to the default (with a note on stderr).
 
 ## Data sources
 
-[devforum.roblox.com](https://devforum.roblox.com) (public Discourse API),
-[Roblox/creator-docs](https://github.com/Roblox/creator-docs), and the
-[Roblox-Client-Tracker](https://github.com/MaximumADHD/Roblox-Client-Tracker) API dump.
+[devforum.roblox.com](https://devforum.roblox.com) (public Discourse API), [Roblox/creator-docs](https://github.com/Roblox/creator-docs), [Roblox-Client-Tracker](https://github.com/MaximumADHD/Roblox-Client-Tracker) API dump.
 
 Not affiliated with or endorsed by Roblox Corporation.
 
@@ -116,8 +106,7 @@ cargo test              # offline unit and tool tests
 npm run inspect         # MCP Inspector against the release build
 ```
 
-Releases: push a `vX.Y.Z` tag and CI builds every binary, publishes to npm and attaches the
-binaries to the GitHub release. See [CHANGELOG.md](CHANGELOG.md).
+Push a `vX.Y.Z` tag to release: CI builds every binary, publishes to npm and the GitHub release.
 
 ## License
 
